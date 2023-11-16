@@ -10,3 +10,4 @@ untangle~=1.2.1
 matplotlib~=3.7.1
 cython~=3.0.0b2
 setuptools~=68.0.0
+torch~=2.1.0
