@@ -1,7 +1,5 @@
 from typing import Callable
 
-import gym
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,7 +7,6 @@ from torch.autograd import Variable
 
 import botbowl
 from botbowl.ai.env import EnvConf, BotBowlEnv
-from env import a2c_scripted_actions
 from botbowl.ai.layers import *
 
 # Architecture
@@ -175,7 +172,7 @@ def main():
     def _make_my_a2c_bot(name, env_size=11):
         return A2CAgent(name=name,
                         env_conf=EnvConf(size=env_size),
-                        scripted_func=a2c_scripted_actions,
+                        # scripted_func=a2c_scripted_actions,
                         filename=model_filename)
     botbowl.register_bot('my-a2c-bot', _make_my_a2c_bot)
 
