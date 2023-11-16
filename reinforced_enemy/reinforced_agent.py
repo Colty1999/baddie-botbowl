@@ -127,8 +127,8 @@ class A2CAgent(Agent):
         self.action_queue = []
 
         # MODEL
-        self.policy = torch.load(filename)
-        self.policy.eval()
+        # self.policy = torch.load(filename)
+        # self.policy.eval()
         self.end_setup = False
 
     def new_game(self, game, team):

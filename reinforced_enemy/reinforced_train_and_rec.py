@@ -1,6 +1,6 @@
 from enum import Enum
 from functools import partial
-import matplotlib as plt
+import matplotlib.pyplot as plt
 import numpy as np
 import os
 import random
@@ -67,6 +67,8 @@ def make_env(env_conf, ppcg=ConfigParams.ppcg.value):
 
 
 def main():
+    ensure_dirs()
+
     envs = VecEnv([make_env(ConfigParams.env_conf.value) for _ in range(ConfigParams.num_processes.value)])
     make_agent_from_model = partial(A2CAgent, env_conf=ConfigParams.env_conf.value)  # , scripted_func=a2c_scripted_actions)
 
