@@ -4,26 +4,26 @@ from botbowl import OutcomeType, Game
 class A2C_Reward:
     # --- Reward function ---
     rewards_own = {
-        OutcomeType.TOUCHDOWN: 1,
+        OutcomeType.TOUCHDOWN: 4,
         OutcomeType.SUCCESSFUL_CATCH: 0.1,
-        OutcomeType.INTERCEPTION: 0.2,
-        OutcomeType.SUCCESSFUL_PICKUP: 0.1,
-        OutcomeType.FUMBLE: -0.1,
-        OutcomeType.KNOCKED_DOWN: -0.1,
-        OutcomeType.KNOCKED_OUT: -0.2,
-        OutcomeType.CASUALTY: -0.5
+        OutcomeType.INTERCEPTION: 0.4,
+        OutcomeType.SUCCESSFUL_PICKUP: 0.3,
+        OutcomeType.FUMBLE: -0.2,
+        OutcomeType.KNOCKED_DOWN: -0.2,
+        OutcomeType.KNOCKED_OUT: -0.3,
+        OutcomeType.CASUALTY: -0.4
     }
     rewards_opp = {
-        OutcomeType.TOUCHDOWN: -1,
-        OutcomeType.SUCCESSFUL_CATCH: -0.1,
-        OutcomeType.INTERCEPTION: -0.2,
-        OutcomeType.SUCCESSFUL_PICKUP: -0.1,
-        OutcomeType.FUMBLE: 0.1,
-        OutcomeType.KNOCKED_DOWN: 0.1,
-        OutcomeType.KNOCKED_OUT: 0.2,
-        OutcomeType.CASUALTY: 0.5
+        OutcomeType.TOUCHDOWN: -3,
+        OutcomeType.SUCCESSFUL_CATCH: -0.2,
+        OutcomeType.INTERCEPTION: -0.4,
+        OutcomeType.SUCCESSFUL_PICKUP: -0.2,
+        OutcomeType.FUMBLE: 0.2,
+        OutcomeType.KNOCKED_DOWN: 0.2,
+        OutcomeType.KNOCKED_OUT: 0.5,
+        OutcomeType.CASUALTY: 0.6
     }
-    ball_progression_reward = 0.005
+    ball_progression_reward = 0.01
 
     def __init__(self):
         self.last_report_idx = 0

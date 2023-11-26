@@ -20,26 +20,26 @@ from reinforcement_parallelization import VecEnv, Memory
 
 
 class ConfigParams(Enum):
-    num_steps = 1000000
+    num_steps = 50000000
     num_processes = 8
     steps_per_update = 20
-    learning_rate = 0.001
-    gamma = 0.99
-    entropy_coef = 0.01
-    value_loss_coef = 0.5
+    learning_rate = 0.008
+    gamma = 0.83
+    entropy_coef = 0.05
+    value_loss_coef = 0.3
     max_grad_norm = 0.05
     log_interval = 50
-    save_interval = 10
+    save_interval = 100
     reset_steps = 5000  # The environment is reset after this many steps it gets stuck
-    selfplay_window = 1
+    selfplay_window = 5
     selfplay_save_steps = int(num_steps / 10)
     selfplay_swap_steps = selfplay_save_steps
-    num_hidden_nodes = 128
-    ppcg = False
-    env_size = 1  # Options are 1,3,5,7,11
+    num_hidden_nodes = 256 #128
+    ppcg = True
+    env_size = 5  # Options are 1,3,5,7,11
     env_name = f"botbowl-{env_size}"
     env_conf = EnvConf(size=env_size, pathfinding=False)
-    selfplay = False
+    selfplay = True
     exp_id = str(uuid.uuid1())
     model_dir = f"models/{env_name}/"
 
@@ -109,6 +109,8 @@ def main():
     episode_tds = []
     episode_tds_opp = []
     wins = []
+    losses = []
+    draws = []
     value_losses = []
     policy_losses = []
     log_updates = []
@@ -165,12 +167,18 @@ def main():
                 if done[i]:
                     if proc_tds[i] > proc_tds_opp[i]:  # Win
                         wins.append(1)
+                        losses.append(0)
+                        draws.append(0)
                         difficulty += dif_delta
                     elif proc_tds[i] < proc_tds_opp[i]:  # Loss
                         wins.append(0)
+                        losses.append(1)
+                        draws.append(0)
                         difficulty -= dif_delta
                     else:  # Draw
-                        wins.append(0.5)
+                        wins.append(0)
+                        losses.append(0)
+                        draws.append(1)
                         difficulty -= dif_delta
                     if ConfigParams.ppcg.value:
                         difficulty = min(1.0, max(0, difficulty))
@@ -270,7 +278,11 @@ def main():
             mean_reward = np.mean(episode_rewards)
             episode_rewards.clear()
             win_rate = np.mean(wins)
+            lose_rate = np.mean(losses)
+            draw_rate = np.mean(draws)
             wins.clear()
+            losses.clear()
+            draws.clear()
 
             log_updates.append(all_updates)
             log_episode.append(all_episodes)
@@ -281,8 +293,8 @@ def main():
             log_mean_reward.append(mean_reward)
             log_difficulty.append(difficulty)
 
-            log = "Updates: {}, Episodes: {}, Timesteps: {}, Win rate: {:.2f}, TD rate: {:.2f}, TD rate opp: {:.2f}, Mean reward: {:.3f}, Difficulty: {:.2f}" \
-                .format(all_updates, all_episodes, all_steps, win_rate, td_rate, td_rate_opp, mean_reward, difficulty)
+            log = "Updates: {}, Episodes: {}, Timesteps: {}, Win rate: {:.2f}, Draw rate: {:.2f}, Lose rate: {:.2f}, TD rate: {:.2f}, TD rate opp: {:.2f}, Mean reward: {:.3f}, Difficulty: {:.2f}" \
+                .format(all_updates, all_episodes, all_steps, win_rate, draw_rate, lose_rate, td_rate, td_rate_opp, mean_reward, difficulty)
 
             log_to_file = "{}, {}, {}, {}, {}, {}, {}\n" \
                 .format(all_updates, all_episodes, all_steps, win_rate, td_rate, td_rate_opp, mean_reward, difficulty)
@@ -341,7 +353,7 @@ def main():
 
     model_name = f"{ConfigParams.exp_id.value}.nn"
     model_path = os.path.join(ConfigParams.model_dir.value, model_name)
-    torch.save(ac_agent, model_path)
+    torch.save(ac_agent.state_dict(), model_path)
     envs.close()
 
 
