@@ -6,19 +6,66 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 
 import botbowl
+import botbowl.web.server as server
 from botbowl.ai.env import EnvConf, BotBowlEnv
 from botbowl.ai.layers import *
+from botbowl.ai.env import BotBowlEnv, RewardWrapper, EnvConf, ScriptedActionWrapper, BotBowlWrapper, PPCGWrapper
+from env import A2C_Reward
+
+
+class ConfigParams(Enum):
+    num_steps = 5000000
+    num_processes = 8
+    steps_per_update = 20
+    learning_rate = 0.01
+    gamma = 0.99
+    entropy_coef = 0.15
+    value_loss_coef = 0.3
+    max_grad_norm = 0.05
+    log_interval = 50
+    save_interval = 100
+    reset_steps = 5000  # The environment is reset after this many steps it gets stuck
+    selfplay_window = 5
+    selfplay_save_steps = int(num_steps / 10)
+    selfplay_swap_steps = selfplay_save_steps
+    num_hidden_nodes = 256
+    ppcg = True
+    env_size = 11  # Options are 1,3,5,7,11
+    env_name = f"botbowl-{env_size}"
+    env_conf = EnvConf(size=env_size, pathfinding=False)
+    selfplay = True
+    exp_id = str(uuid.uuid1())
+    model_dir = f"models/{env_name}/"
+
 
 # Architecture
-model_name = '260d8284-9d44-11ec-b455-faffc23fefdb'
+model_name = 'bd0e2863-8eaf-11ee-ae4f-d45d641e693d'
 env_name = f'botbowl-11'
 model_filename = f"models/{env_name}/{model_name}.nn"
 log_filename = f"logs/{env_name}/{env_name}.dat"
 
 
+def make_env(env_conf, ppcg=ConfigParams.ppcg.value):
+    env = BotBowlEnv(env_conf)
+    if ppcg:
+        env = PPCGWrapper(env)
+    # env = ScriptedActionWrapper(env, scripted_func=a2c_scripted_actions)
+    env = RewardWrapper(env, home_reward_func=A2C_Reward())
+    return env
+
+
+env = make_env(ConfigParams.env_conf.value)
+spat_obs, non_spat_obs, action_mask = env.reset()
+spatial_obs_space = spat_obs.shape
+non_spatial_obs_space = non_spat_obs.shape[0]
+action_space = len(action_mask)
+del env, non_spat_obs, action_mask  # remove from scope to avoid confusion further down
+
+
 class CNNPolicy(nn.Module):
 
-    def __init__(self, spatial_shape, non_spatial_inputs, hidden_nodes, kernels, actions):
+    def __init__(self, spatial_shape=spatial_obs_space, non_spatial_inputs=non_spatial_obs_space,
+                 hidden_nodes=ConfigParams.num_hidden_nodes.value, kernels=[32, 64], actions=action_space):
         super(CNNPolicy, self).__init__()
 
         # Spatial input stream
@@ -127,8 +174,10 @@ class A2CAgent(Agent):
         self.action_queue = []
 
         # MODEL
-        # self.policy = torch.load(filename)
-        # self.policy.eval()
+        # self.policy = CNNPolicy() # For testing games
+        # self.policy.load_state_dict(torch.load(filename))
+        self.policy = torch.load(filename)
+        self.policy.eval()
         self.end_setup = False
 
     def new_game(self, game, team):
@@ -195,7 +244,8 @@ def main():
     tds_away = 0
     tds_home = 0
     for i in range(n):
-
+        host = "127.0.0.1"
+        server.start_server(host=host, debug=True, use_reloader=False, port=1234)
         if is_home:
             away_agent = botbowl.make_bot('random')
             home_agent = botbowl.make_bot('my-a2c-bot')
