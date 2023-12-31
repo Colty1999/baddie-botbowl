@@ -115,7 +115,7 @@ class CNNPolicy(nn.Module):
         self.linear5 = nn.Linear(hidden_nodes, hidden_nodes)
         self.linear6 = nn.Linear(hidden_nodes, hidden_nodes)
         self.linear7 = nn.Linear(hidden_nodes, hidden_nodes)
-        self.linear8 = nn.Linear(hidden_nodes, 1)
+        self.linear_out = nn.Linear(hidden_nodes, 1)
         # Convolutions with channel attention
         self.conv_ch = self._make_layer(ChannelAttention, [128, 64], 1)
         self.linear_actor = nn.Linear(1024, 25)
@@ -188,7 +188,7 @@ class CNNPolicy(nn.Module):
         x6 = torch.cat(x4_flatten, x5)
 
         # Output streams
-        x7 = self.linear8(x3)
+        x7 = self.linear_out(x3)
         value = self.critic(x7)
         actor = self.actor(x6)
 
