@@ -28,7 +28,7 @@ class ConfigParams(Enum):
     selfplay_window = 5
     selfplay_save_steps = int(num_steps / 10)
     selfplay_swap_steps = selfplay_save_steps
-    num_hidden_nodes = 256
+    num_hidden_nodes = 1024
     ppcg = True
     env_size = 11  # Options are 1,3,5,7,11
     env_name = f"botbowl-{env_size}"
@@ -62,23 +62,69 @@ action_space = len(action_mask)
 del env, non_spat_obs, action_mask  # remove from scope to avoid confusion further down
 
 
+class ResidualBlock(nn.Module):
+    def __init__(self, kernels=[128, 128]):
+        super(ResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels=kernels[0], out_channels=kernels[1], kernel_size=1, stride=1, padding=0)
+        self.conv2 = nn.Conv2d(in_channels=kernels[0], out_channels=kernels[1], kernel_size=1, stride=1, padding=0)
+        self.conv3 = nn.Conv2d(in_channels=kernels[0], out_channels=kernels[1], kernel_size=1, stride=1, padding=0)
+
+    def forward(self, x):
+        residual = x
+        out = F.leaky_relu(self.conv1(x))
+        out = F.leaky_relu(self.conv2(out))
+        out = F.leaky_relu(self.conv3(out))
+        out += residual
+        return out
+
+
+class ChannelAttention(nn.Module):
+    def __init__(self, kernels=[128, 64]):
+        super(ChannelAttention, self).__init__()
+        self.conv0 = nn.Conv2d(in_channels=kernels[0], out_channels=kernels[1], kernel_size=1, stride=1, padding=0)
+        self.conv1 = nn.Conv2d(in_channels=kernels[0], out_channels=kernels[1], kernel_size=1, stride=1, padding=0)
+        self.conv2 = nn.Conv2d(in_channels=kernels[0], out_channels=kernels[1], kernel_size=1, stride=1, padding=0)
+        self.linear0 = nn.Linear(1024, 64)
+        self.linear1 = nn.Linear(1024, 64)
+        self.linear2 = nn.Linear(1024, 17)
+
+    def forward(self, x, latent_space):
+        out = torch.cat(F.leaky_relu(self.conv0(x)), F.sigmoid(F.leaky_relu(self.linear0(latent_space))))
+        out = torch.cat(F.leaky_relu(self.conv1(out)), F.sigmoid(F.leaky_relu(self.linear1(latent_space))))
+        out = torch.cat(F.leaky_relu(self.conv2(out)), F.sigmoid(F.leaky_relu(self.linear2(latent_space))))
+        return out
+
+
 class CNNPolicy(nn.Module):
 
     def __init__(self, spatial_shape=spatial_obs_space, non_spatial_inputs=non_spatial_obs_space,
-                 hidden_nodes=ConfigParams.num_hidden_nodes.value, kernels=[32, 64], actions=action_space):
+                 hidden_nodes=ConfigParams.num_hidden_nodes.value, kernels=[128, 128], actions=action_space):
         super(CNNPolicy, self).__init__()
 
         # Spatial input stream
-        self.conv1 = nn.Conv2d(spatial_shape[0], out_channels=kernels[0], kernel_size=3, stride=1, padding=1)
-        self.conv2 = nn.Conv2d(in_channels=kernels[0], out_channels=kernels[1], kernel_size=3, stride=1, padding=1)
-
+        self.conv1 = nn.Conv2d(spatial_shape[0], out_channels=kernels[0], kernel_size=1, stride=1, padding=0)
+        # Residual block layers
+        self.conv_res = self._make_layer(ResidualBlock, kernels, 4)
         # Non-spatial input stream
         self.linear0 = nn.Linear(non_spatial_inputs, hidden_nodes)
+        self.linear1 = nn.Linear(hidden_nodes, hidden_nodes)
+        self.linear2 = nn.Linear(hidden_nodes, hidden_nodes)
+        self.linear3 = nn.Linear(hidden_nodes, hidden_nodes)
+        # Concatenated stream
+        self.linear4 = nn.Linear(1024*128*spatial_shape[1]*spatial_shape[2], hidden_nodes)
+        self.linear5 = nn.Linear(hidden_nodes, hidden_nodes)
+        self.linear6 = nn.Linear(hidden_nodes, hidden_nodes)
+        self.linear7 = nn.Linear(hidden_nodes, hidden_nodes)
+        self.linear8 = nn.Linear(hidden_nodes, 1)
+        # Convolutions with channel attention
+        self.conv_ch = self._make_layer(ChannelAttention, [128, 64], 1)
+        self.linear_actor = nn.Linear(1024, 25)
+
 
         # Linear layers
-        stream_size = kernels[1] * spatial_shape[1] * spatial_shape[2]
-        stream_size += hidden_nodes
-        self.linear1 = nn.Linear(stream_size, hidden_nodes)
+        # stream_size = kernels[1] * spatial_shape[1] * spatial_shape[2]
+        # stream_size += hidden_nodes
+        # self.linear1 = nn.Linear(stream_size, hidden_nodes)
 
         # The outputs
         self.critic = nn.Linear(hidden_nodes, 1)
@@ -87,12 +133,25 @@ class CNNPolicy(nn.Module):
         self.train()
         self.reset_parameters()
 
+    @staticmethod
+    def _make_layer(block, kernels, blocks):
+        layers = []
+        for i in range(blocks):
+            layers.append(block(kernels))
+        return nn.Sequential(*layers)
+
     def reset_parameters(self):
-        relu_gain = nn.init.calculate_gain('relu')
+        relu_gain = nn.init.calculate_gain('leaky_relu')
         self.conv1.weight.data.mul_(relu_gain)
-        self.conv2.weight.data.mul_(relu_gain)
+        self.conv_res.weight.data.mul_(relu_gain)
         self.linear0.weight.data.mul_(relu_gain)
         self.linear1.weight.data.mul_(relu_gain)
+        self.linear2.weight.data.mul_(relu_gain)
+        self.linear3.weight.data.mul_(relu_gain)
+        self.linear4.weight.data.mul_(relu_gain)
+        self.linear5.weight.data.mul_(relu_gain)
+        self.linear6.weight.data.mul_(relu_gain)
+        self.linear7.weight.data.mul_(relu_gain)
         self.actor.weight.data.mul_(relu_gain)
         self.critic.weight.data.mul_(relu_gain)
 
@@ -103,28 +162,35 @@ class CNNPolicy(nn.Module):
         # Spatial input through two convolutional layers
 
         x1 = self.conv1(spatial_input)
-        x1 = F.relu(x1)
-        x1 = self.conv2(x1)
-        x1 = F.relu(x1)
+        x1 = self.conv_res(x1)
+        x1 = torch.cat(x1, spatial_input)
 
         # Concatenate the input streams
         flatten_x1 = x1.flatten(start_dim=1)
 
-        x2 = self.linear0(non_spatial_input)
-        x2 = F.relu(x2)
+        x2 = F.leaky_relu(self.linear0(non_spatial_input))
+        x2 = F.leaky_relu(self.linear1(x2))
+        x2 = F.leaky_relu(self.linear2(x2))
+        x2 = F.leaky_relu(self.linear3(x2))
 
         flatten_x2 = x2.flatten(start_dim=1)
         concatenated = torch.cat((flatten_x1, flatten_x2), dim=1)
 
-        # Fully-connected layers
-        x3 = self.linear1(concatenated)
-        x3 = F.relu(x3)
-        #x2 = self.linear2(x2)
-        #x2 = F.relu(x2)
+        x3 = F.leaky_relu(self.linear4(concatenated))
+        x3 = F.leaky_relu(self.linear5(x3))
+        x3 = F.leaky_relu(self.linear6(x3))
+        x3 = F.leaky_relu(self.linear7(x3))
+
+        # Convolution with channel attetion
+        x4 = self.conv_ch(x1, x3)
+        x4_flatten = x4.flatten(start_dim=1)
+        x5 = self.linear_actor(x3)
+        x6 = torch.cat(x4_flatten, x5)
 
         # Output streams
-        value = self.critic(x3)
-        actor = self.actor(x3)
+        x7 = self.linear8(x3)
+        value = self.critic(x7)
+        actor = self.actor(x6)
 
         # return value, policy
         return value, actor
