@@ -1,5 +1,7 @@
 from enum import Enum
 from functools import partial
+
+import botbowl
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -11,6 +13,7 @@ from torch.autograd import Variable
 import uuid
 
 from botbowl.ai.env import BotBowlEnv, RewardWrapper, EnvConf, ScriptedActionWrapper, BotBowlWrapper, PPCGWrapper
+from examples.scripted_bot_example import *
 
 from env import A2C_Reward
 from reinforced_agent import CNNPolicy, A2CAgent
@@ -20,11 +23,11 @@ from reinforcement_parallelization import VecEnv, Memory
 
 
 class ConfigParams(Enum):
-    num_steps = 50000000
-    num_processes = 8
+    num_steps = 100000000
+    num_processes = 20
     steps_per_update = 20
-    learning_rate = 0.008
-    gamma = 0.83
+    learning_rate = 0.01
+    gamma = 0.99
     entropy_coef = 0.05
     value_loss_coef = 0.3
     max_grad_norm = 0.05
@@ -34,9 +37,9 @@ class ConfigParams(Enum):
     selfplay_window = 5
     selfplay_save_steps = int(num_steps / 10)
     selfplay_swap_steps = selfplay_save_steps
-    num_hidden_nodes = 256 #128
+    num_hidden_nodes = 256# 128
     ppcg = True
-    env_size = 5  # Options are 1,3,5,7,11
+    env_size = 11  # Options are 1,3,5,7,11
     env_name = f"botbowl-{env_size}"
     env_conf = EnvConf(size=env_size, pathfinding=False)
     selfplay = True
@@ -128,11 +131,15 @@ def main():
     selfplay_models = 0
 
     if ConfigParams.selfplay.value:
+
         model_name = f"{ConfigParams.exp_id.value}_selfplay_0.nn"
         model_path = os.path.join(f"models/{ConfigParams.env_name.value}/", model_name)
         torch.save(ac_agent, model_path)
         self_play_agent = make_agent_from_model(name=model_name, filename=model_path)
-        envs.swap(self_play_agent)
+        if selfplay_models % 2 == 0:
+            envs.swap(self_play_agent)
+        else:
+            envs.swap(botbowl.make_bot('scripted'))
         selfplay_models += 1
 
     # Reset environments
@@ -262,11 +269,15 @@ def main():
         if ConfigParams.selfplay.value and all_steps >= selfplay_next_swap:
             selfplay_next_swap = max(all_steps + 1, selfplay_next_swap + ConfigParams.selfplay_swap_steps.value)
             lower = max(0, selfplay_models - 1 - (ConfigParams.selfplay_window.value - 1))
-            i = random.randint(lower, selfplay_models - 1)
-            model_name = f"{ConfigParams.exp_id.value}_selfplay_{i}.nn"
-            model_path = os.path.join(ConfigParams.model_dir.value, model_name)
-            print(f"Swapping opponent to {model_path}")
-            envs.swap(make_agent_from_model(name=model_name, filename=model_path))
+            if selfplay_models % 2 == 0:
+                i = random.randint(lower, selfplay_models - 1)
+                model_name = f"{ConfigParams.exp_id.value}_selfplay_{i}.nn"
+                model_path = os.path.join(ConfigParams.model_dir.value, model_name)
+                print(f"Swapping opponent to {model_path}")
+                envs.swap(make_agent_from_model(name=model_name, filename=model_path))
+            else:
+                envs.swap(botbowl.make_bot('scripted'))
+                print("Swapping opponent to scripted")
 
         # Logging
         if all_updates % ConfigParams.log_interval.value == 0 \
@@ -352,8 +363,10 @@ def main():
             plt.close('all')
 
     model_name = f"{ConfigParams.exp_id.value}.nn"
+    dict_name = f"{ConfigParams.exp_id.value}_dict.nn"
     model_path = os.path.join(ConfigParams.model_dir.value, model_name)
-    torch.save(ac_agent.state_dict(), model_path)
+    torch.save(ac_agent, model_path)
+    torch.save(ac_agent.state_dict(), dict_name)
     envs.close()
 
 
