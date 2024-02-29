@@ -14,6 +14,7 @@ from env import A2C_Reward
 
 
 class ConfigParams(Enum):
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     num_steps = 5000000
     num_processes = 8
     steps_per_update = 20
@@ -36,6 +37,7 @@ class ConfigParams(Enum):
     selfplay = True
     exp_id = str(uuid.uuid1())
     model_dir = f"models/{env_name}/"
+    model_path = f"models/{env_name}/a2c.pt"
 
 
 # Architecture
@@ -77,22 +79,40 @@ class ResidualBlock(nn.Module):
         out += residual
         return out
 
+    def reset_parameters(self, relu_gain):
+        self.conv1.weight.data.mul_(relu_gain)
+        self.conv2.weight.data.mul_(relu_gain)
+        self.conv3.weight.data.mul_(relu_gain)
+
 
 class ChannelAttention(nn.Module):
-    def __init__(self, kernels=[128, 64]):
+    def __init__(self, kernels=[128, 64, 17], spatial_shape=spatial_obs_space):
         super(ChannelAttention, self).__init__()
-        self.conv0 = nn.Conv2d(in_channels=kernels[0], out_channels=kernels[1], kernel_size=1, stride=1, padding=0)
-        self.conv1 = nn.Conv2d(in_channels=kernels[0], out_channels=kernels[1], kernel_size=1, stride=1, padding=0)
-        self.conv2 = nn.Conv2d(in_channels=kernels[0], out_channels=kernels[1], kernel_size=1, stride=1, padding=0)
-        self.linear0 = nn.Linear(1024, 64)
+        self.conv1 = nn.Conv2d(in_channels=kernels[0]+spatial_shape[0],
+                               out_channels=kernels[1], kernel_size=3, stride=1, padding='same')
+        self.conv2 = nn.Conv2d(in_channels=kernels[1], out_channels=kernels[1], kernel_size=3, stride=1, padding='same')
+        self.conv3 = nn.Conv2d(in_channels=kernels[1], out_channels=kernels[2], kernel_size=3, stride=1, padding='same')
         self.linear1 = nn.Linear(1024, 64)
-        self.linear2 = nn.Linear(1024, 17)
+        self.linear2 = nn.Linear(1024, 64)
+        self.linear3 = nn.Linear(1024, 17)
 
-    def forward(self, x, latent_space):
-        out = torch.cat(F.leaky_relu(self.conv0(x)), F.sigmoid(F.leaky_relu(self.linear0(latent_space))))
-        out = torch.cat(F.leaky_relu(self.conv1(out)), F.sigmoid(F.leaky_relu(self.linear1(latent_space))))
-        out = torch.cat(F.leaky_relu(self.conv2(out)), F.sigmoid(F.leaky_relu(self.linear2(latent_space))))
+    def forward(self, x):#, latent_space):
+        # out = torch.cat(F.leaky_relu(self.conv0(x[0])), F.sigmoid(F.leaky_relu(self.linear0(latent_space))))
+        sigmoid = F.sigmoid(F.leaky_relu(self.linear1(x[1])))
+        out = torch.multiply(F.leaky_relu(self.conv1(x[0])), sigmoid.view(sigmoid.size()[0], sigmoid.size()[1], 1, 1))
+        sigmoid = F.sigmoid(F.leaky_relu(self.linear2(x[1])))
+        out = torch.multiply(F.leaky_relu(self.conv2(out)), sigmoid.view(sigmoid.size()[0], sigmoid.size()[1], 1, 1))
+        sigmoid = F.sigmoid(F.leaky_relu(self.linear3(x[1])))
+        out = torch.multiply(F.leaky_relu(self.conv3(out)), sigmoid.view(sigmoid.size()[0], sigmoid.size()[1], 1, 1))
         return out
+
+    def reset_parameters(self, relu_gain):
+        self.conv1.weight.data.mul_(relu_gain)
+        self.conv2.weight.data.mul_(relu_gain)
+        self.conv3.weight.data.mul_(relu_gain)
+        self.linear1.weight.data.mul_(relu_gain)
+        self.linear2.weight.data.mul_(relu_gain)
+        self.linear3.weight.data.mul_(relu_gain)
 
 
 class CNNPolicy(nn.Module):
@@ -111,13 +131,13 @@ class CNNPolicy(nn.Module):
         self.linear2 = nn.Linear(hidden_nodes, hidden_nodes)
         self.linear3 = nn.Linear(hidden_nodes, hidden_nodes)
         # Concatenated stream
-        self.linear4 = nn.Linear(1024*128*spatial_shape[1]*spatial_shape[2], hidden_nodes)
+        self.linear4 = nn.Linear(1024+128*spatial_shape[1]*spatial_shape[2], hidden_nodes)
         self.linear5 = nn.Linear(hidden_nodes, hidden_nodes)
         self.linear6 = nn.Linear(hidden_nodes, hidden_nodes)
         self.linear7 = nn.Linear(hidden_nodes, hidden_nodes)
         self.linear_out = nn.Linear(hidden_nodes, 1)
         # Convolutions with channel attention
-        self.conv_ch = self._make_layer(ChannelAttention, [128, 64], 1)
+        self.conv_ch = self._make_layer(ChannelAttention, [128, 64, 17], 1)
         self.linear_actor = nn.Linear(1024, 25)
 
 
@@ -143,7 +163,9 @@ class CNNPolicy(nn.Module):
     def reset_parameters(self):
         relu_gain = nn.init.calculate_gain('leaky_relu')
         self.conv1.weight.data.mul_(relu_gain)
-        self.conv_res.weight.data.mul_(relu_gain)
+        #self.conv_res.weight.data.mul_(relu_gain)
+        for res in self.conv_res:  # reset residual blocks
+            res.reset_parameters(relu_gain)
         self.linear0.weight.data.mul_(relu_gain)
         self.linear1.weight.data.mul_(relu_gain)
         self.linear2.weight.data.mul_(relu_gain)
@@ -152,6 +174,9 @@ class CNNPolicy(nn.Module):
         self.linear5.weight.data.mul_(relu_gain)
         self.linear6.weight.data.mul_(relu_gain)
         self.linear7.weight.data.mul_(relu_gain)
+        for att in self.conv_ch:  # reset channel attention
+            att.reset_parameters(relu_gain)
+        # self.conv_ch.reset_parameters(relu_gain)
         self.actor.weight.data.mul_(relu_gain)
         self.critic.weight.data.mul_(relu_gain)
 
@@ -163,7 +188,7 @@ class CNNPolicy(nn.Module):
 
         x1 = self.conv1(spatial_input)
         x1 = self.conv_res(x1)
-        x1 = torch.cat(x1, spatial_input)
+        x1_cat = torch.cat((x1, spatial_input), dim=1)
 
         # Concatenate the input streams
         flatten_x1 = x1.flatten(start_dim=1)
@@ -181,16 +206,17 @@ class CNNPolicy(nn.Module):
         x3 = F.leaky_relu(self.linear6(x3))
         x3 = F.leaky_relu(self.linear7(x3))
 
-        # Convolution with channel attetion
-        x4 = self.conv_ch(x1, x3)
+        # Convolution with channel attention
+        # x3 needs to be resized due to the difference in sizes of spatial and non-spatial obs spaces
+        x4 = self.conv_ch((x1_cat, x3))
         x4_flatten = x4.flatten(start_dim=1)
         x5 = self.linear_actor(x3)
-        x6 = torch.cat(x4_flatten, x5)
+        actor = torch.cat((x4_flatten, x5), dim=1)
 
         # Output streams
-        x7 = self.linear_out(x3)
-        value = self.critic(x7)
-        actor = self.actor(x6)
+        value = self.linear_out(x3)
+        #value = self.critic(x7)
+        # actor = self.actor(x6)
 
         # return value, policy
         return value, actor
@@ -221,6 +247,8 @@ class CNNPolicy(nn.Module):
         values, actions = self(spatial_input, non_spatial_input)
         # Masking step: Inspired by: http://juditacs.github.io/2018/12/27/masked-attention.html
         if action_mask is not None:
+            column = torch.full((action_mask.shape[0], 1), True, dtype=torch.bool)
+            action_mask = torch.cat((action_mask,column), dim=1)  # TODO: action mask is one column short find out why
             actions[~action_mask] = float('-inf')
         action_probs = F.softmax(actions, dim=1)
         return values, action_probs
@@ -240,14 +268,18 @@ class A2CAgent(Agent):
         self.action_queue = []
 
         # MODEL
-        # self.policy = CNNPolicy() # For testing games
+        # self.policy = CNNPolicy()  # For testing games
         # self.policy.load_state_dict(torch.load(filename))
+        self.device = ConfigParams.device.value
         self.policy = torch.load(filename)
         self.policy.eval()
+        self.policy.to(self.device)
         self.end_setup = False
 
     def new_game(self, game, team):
-        pass
+        self.own_team = team
+        self.opp_team = game.get_opp_team(team)
+        self.is_home = team == game.state.home_team
 
     @staticmethod
     def _update_obs(array: np.ndarray):
