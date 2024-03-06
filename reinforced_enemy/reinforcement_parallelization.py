@@ -19,17 +19,17 @@ class Memory(object):
         action_shape = 1
         self.actions = torch.zeros(steps_per_update, num_processes, action_shape)
         self.actions = self.actions.long()
-        self.masks = torch.ones(steps_per_update + 1, num_processes, 1)
+        self.masks = torch.ones(steps_per_update + 1, num_processes, 1)  # torch.ones(steps_per_update + 1, num_processes, 1)
         self.action_masks = torch.zeros(steps_per_update + 1, num_processes, action_space, dtype=torch.bool)
 
-    def cuda(self):
-        self.spatial_obs = self.spatial_obs.cuda()
-        self.non_spatial_obs = self.non_spatial_obs.cuda()
-        self.rewards = self.rewards.cuda()
-        self.returns = self.returns.cuda()
-        self.actions = self.actions.cuda()
-        self.masks = self.masks.cuda()
-        self.action_masks = self.action_masks.cuda()
+    def to(self, device):
+        self.spatial_obs = self.spatial_obs.to(device)
+        self.non_spatial_obs = self.non_spatial_obs.to(device)
+        self.rewards = self.rewards.to(device)
+        self.returns = self.returns.to(device)
+        self.actions = self.actions.to(device)
+        self.masks = self.masks.to(device)
+        self.action_masks = self.action_masks.to(device)
 
     def insert(self, step, spatial_obs, non_spatial_obs, action, reward, mask, action_masks):
         self.spatial_obs[step + 1].copy_(torch.from_numpy(spatial_obs).float())

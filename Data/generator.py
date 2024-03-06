@@ -1,11 +1,13 @@
 import botbowl
-from scripted_bot import ScriptedBot
+from Data.scripted_bot import ScriptedBot
 import torch
 from torch.utils.data import Dataset, DataLoader, ConcatDataset
 import os
 import random
 from joblib import Parallel, delayed
 from tqdm import tqdm
+
+scripted_data_path = os.path.join(os.path.dirname(__file__), "scripted_dataset")  # os.path.join(os.getcwd(), "scripted_dataset")
 
 
 class ScriptedDataGenerator:
@@ -22,7 +24,7 @@ class ScriptedDataGenerator:
         self.home = None
         self.away = None
         self.game_config = None
-        self.out_path = os.path.join(os.getcwd(), "scripted_dataset")
+        self.out_path = scripted_data_path
 
         # obtained data
         self.game_data = []
@@ -61,14 +63,18 @@ class ScriptedDataGenerator:
 
         Parallel(n_jobs=-1)(delayed(self._play_game)(agent_1_id, agent_2_id, i) for i in tqdm(range(num_games),desc='Playing games'))
 
-    def generate_training_data(self):
+    def generate_training_data(self, bot='scripted'):
 
         if not os.path.exists(self.out_path):
             os.mkdir(self.out_path)
 
         # play games
-        print('Playing games vs scripted bot')
-        self._do_playouts(ScriptedBot.BOT_ID, ScriptedBot.BOT_ID, self.num_games)
+        if bot in ['scripted', 'both']:
+            print('Playing games vs scripted bot')
+            self._do_playouts(ScriptedBot.BOT_ID, ScriptedBot.BOT_ID, self.num_games)
+        elif bot in ['random', 'both']:
+            print('Playing games vs random bot')
+            self._do_playouts(ScriptedBot.BOT_ID, 'random', self.num_games)
         print('Finished playing games')
 
 
@@ -88,7 +94,7 @@ class ScriptedDataset(Dataset):
             return self.data[idx]
 
         obs, act = torch.load(self.files[idx])
-        pair = [obs['spatial_obs'], obs['non_spatial_obs'], act]
+        pair = [obs['spatial_obs'], obs['non_spatial_obs'], obs['action_mask'], act]
 
         if self.cache_data:
             self.data[idx] = pair
@@ -97,11 +103,11 @@ class ScriptedDataset(Dataset):
     def load_data(self):
         for i, file in tqdm(enumerate(self.files), desc='Loading data'):
             obs, act = torch.load(file)
-            pair = [obs['spatial_obs'], obs['non_spatial_obs'], act]
+            pair = [obs['spatial_obs'], obs['non_spatial_obs'], obs['action_mask'], act]
             self.data[i] = pair
 
 
-def get_scripted_dataset(paths=[os.path.join(os.getcwd(), "scripted_dataset")], training_percentage=0.9, cache_data=True):
+def get_scripted_dataset(paths=[scripted_data_path], training_percentage=0.9, cache_data=True):
     if not isinstance(paths, list):
         raise Exception(f'Expected a list of paths but got {paths}')
     tensor_files = []
@@ -116,5 +122,5 @@ def get_scripted_dataset(paths=[os.path.join(os.getcwd(), "scripted_dataset")], 
 
 
 if __name__ == '__main__':
-    generator = ScriptedDataGenerator(num_games=30)
-    generator.generate_training_data()
+    generator = ScriptedDataGenerator(num_games=300)
+    generator.generate_training_data(bot='random')
