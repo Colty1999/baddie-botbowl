@@ -16,34 +16,34 @@ from env import A2C_Reward
 class ConfigParams(Enum):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     num_steps = 5000000
-    num_processes = 8
+    num_processes = 2
     steps_per_update = 20
-    learning_rate = 0.01
+    learning_rate = 5e-6
     gamma = 0.99
-    entropy_coef = 0.15
-    value_loss_coef = 0.3
+    entropy_coef = 0.01
+    value_loss_coef = 0.5
     max_grad_norm = 0.05
     log_interval = 50
     save_interval = 100
     reset_steps = 5000  # The environment is reset after this many steps it gets stuck
     selfplay_window = 5
-    selfplay_save_steps = int(num_steps / 10)
+    selfplay_save_steps = int(num_steps / 100)
     selfplay_swap_steps = selfplay_save_steps
     num_hidden_nodes = 1024
     ppcg = True
     env_size = 11  # Options are 1,3,5,7,11
     env_name = f"botbowl-{env_size}"
     env_conf = EnvConf(size=env_size, pathfinding=False)
-    selfplay = True
+    selfplay = False
     exp_id = str(uuid.uuid1())
     model_dir = f"models/{env_name}/"
     model_path = f"models/{env_name}/a2c.pt"
 
 
 # Architecture
-model_name = 'bd0e2863-8eaf-11ee-ae4f-d45d641e693d'
+model_name = 'a2c.pt'
 env_name = f'botbowl-11'
-model_filename = f"models/{env_name}/{model_name}.nn"
+model_filename = f"models/{env_name}/{model_name}"
 log_filename = f"logs/{env_name}/{env_name}.dat"
 
 
@@ -67,9 +67,9 @@ del env, non_spat_obs, action_mask  # remove from scope to avoid confusion furth
 class ResidualBlock(nn.Module):
     def __init__(self, kernels=[128, 128]):
         super(ResidualBlock, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels=kernels[0], out_channels=kernels[1], kernel_size=1, stride=1, padding=0)
-        self.conv2 = nn.Conv2d(in_channels=kernels[0], out_channels=kernels[1], kernel_size=1, stride=1, padding=0)
-        self.conv3 = nn.Conv2d(in_channels=kernels[0], out_channels=kernels[1], kernel_size=1, stride=1, padding=0)
+        self.conv1 = nn.Conv2d(in_channels=kernels[0], out_channels=kernels[1], kernel_size=3, stride=1, padding="same")
+        self.conv2 = nn.Conv2d(in_channels=kernels[0], out_channels=kernels[1], kernel_size=3, stride=1, padding="same")
+        self.conv3 = nn.Conv2d(in_channels=kernels[0], out_channels=kernels[1], kernel_size=3, stride=1, padding="same")
 
     def forward(self, x):
         residual = x
@@ -118,11 +118,12 @@ class ChannelAttention(nn.Module):
 class CNNPolicy(nn.Module):
 
     def __init__(self, spatial_shape=spatial_obs_space, non_spatial_inputs=non_spatial_obs_space,
-                 hidden_nodes=ConfigParams.num_hidden_nodes.value, kernels=[128, 128], actions=action_space):
+                 hidden_nodes=ConfigParams.num_hidden_nodes.value, kernels=[128, 128], actions=action_space,
+                 filename=None):
         super(CNNPolicy, self).__init__()
 
         # Spatial input stream
-        self.conv1 = nn.Conv2d(spatial_shape[0], out_channels=kernels[0], kernel_size=1, stride=1, padding=0)
+        self.conv1 = nn.Conv2d(spatial_shape[0], out_channels=kernels[0], kernel_size=4, stride=1, padding="same")
         # Residual block layers
         self.conv_res = self._make_layer(ResidualBlock, kernels, 4)
         # Non-spatial input stream
@@ -138,7 +139,8 @@ class CNNPolicy(nn.Module):
         self.linear_out = nn.Linear(hidden_nodes, 1)
         # Convolutions with channel attention
         self.conv_ch = self._make_layer(ChannelAttention, [128, 64, 17], 1)
-        self.linear_actor = nn.Linear(1024, 25)
+        #self.linear_actor = nn.Linear(1024, 25)
+        self.linear_actor = nn.Linear(1024, 24)
 
 
         # Linear layers
@@ -153,6 +155,8 @@ class CNNPolicy(nn.Module):
         self.train()
         self.reset_parameters()
 
+        if filename is not None:
+            self.load_state_dict(torch.load(filename))
     @staticmethod
     def _make_layer(block, kernels, blocks):
         layers = []
@@ -221,15 +225,22 @@ class CNNPolicy(nn.Module):
         # return value, policy
         return value, actor
 
-    def act(self, spatial_inputs, non_spatial_input, action_mask):
+    def act(self, spatial_inputs, non_spatial_input, action_mask, prev_actions=None):
         values, action_probs = self.get_action_probs(spatial_inputs, non_spatial_input, action_mask=action_mask)
-        actions = action_probs.multinomial(1)
-        # In rare cases, multinomial can  sample an action with p=0, so let's avoid that
-        for i, action in enumerate(actions):
-            correct_action = action
-            while not action_mask[i][correct_action]:
-                correct_action = action_probs[i].multinomial(1)
-            actions[i] = correct_action
+        action_probs = torch.nan_to_num(action_probs)
+        action_probs = torch.nn.functional.relu(action_probs, inplace=True)
+        try:
+            actions = action_probs.multinomial(1)
+            # In rare cases, multinomial can  sample an action with p=0, to avoid that we use try except
+            for i, action in enumerate(actions):
+                correct_action = action
+                while not action_mask[i][correct_action]:
+                    correct_action = action_probs[i].multinomial(1)
+                actions[i] = correct_action
+        except:
+            # if multinomial fails then actions from the previous step are taken instead of calculating new ones
+            actions = prev_actions
+
         return values, actions
 
     def evaluate_actions(self, spatial_inputs, non_spatial_input, actions, actions_mask):
@@ -247,8 +258,8 @@ class CNNPolicy(nn.Module):
         values, actions = self(spatial_input, non_spatial_input)
         # Masking step: Inspired by: http://juditacs.github.io/2018/12/27/masked-attention.html
         if action_mask is not None:
-            column = torch.full((action_mask.shape[0], 1), True, dtype=torch.bool)
-            action_mask = torch.cat((action_mask,column), dim=1)  # TODO: action mask is one column short find out why
+            if len(action_mask.shape) == 1:
+                action_mask = torch.reshape(action_mask, (1, -1))
             actions[~action_mask] = float('-inf')
         action_probs = F.softmax(actions, dim=1)
         return values, action_probs
@@ -297,7 +308,10 @@ class A2CAgent(Agent):
         self.env.game = game
 
         spatial_obs, non_spatial_obs, action_mask = map(A2CAgent._update_obs, self.env.get_state())
+        spatial_obs = spatial_obs.to(ConfigParams.device.value)
         non_spatial_obs = torch.unsqueeze(non_spatial_obs, dim=0)
+        non_spatial_obs = non_spatial_obs.to(ConfigParams.device.value)
+        action_mask = action_mask.to(ConfigParams.device.value)
 
         _, actions = self.policy.act(
             Variable(spatial_obs.float()),
