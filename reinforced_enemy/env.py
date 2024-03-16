@@ -66,11 +66,19 @@ class A2C_Reward:
 
         return r
 
-# Todo add scripted functions after merging with scripted bot
-# def a2c_scripted_actions(game: Game):
-#     proc_type = type(game.get_procedure())
-#     if proc_type is procedure.Block:
-#         # noinspection PyTypeChecker
-#         return MyScriptedBot.block(self=None, game=game)
-#
-#     return None
+def a2c_scripted_actions(game: Game):
+    proc_type = type(game.get_procedure())
+    if proc_type is procedure.Block:
+        # noinspection PyTypeChecker
+        return MyScriptedBot.block(self=None, game=game)
+    if proc_type is procedure.CoinTossFlip
+        return MyScriptedBot.coin_toss_flip(self=None, game=game)
+    if proc_type is procedure.CoinTossKickReceive
+        return MyScriptedBot.coin_toss_kick_receive(self=None, game=game)
+    if proc_type is MyScriptedBot.PlaceBall
+        return MyScriptedBot.place_ball(self=None, game=game)
+    if proc_type is MyScriptedBot.Reroll
+        return MyScriptedBot.reroll(self=None, game=game)
+    if proc_type is MyScriptedBot.Setup
+        return MyScriptedBot.setup(self=None, game=game)
+    return None
