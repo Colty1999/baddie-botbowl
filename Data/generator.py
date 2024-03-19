@@ -72,7 +72,7 @@ class ScriptedDataGenerator:
         if bot in ['scripted', 'both']:
             print('Playing games vs scripted bot')
             self._do_playouts(ScriptedBot.BOT_ID, ScriptedBot.BOT_ID, self.num_games)
-        elif bot in ['random', 'both']:
+        if bot in ['random', 'both']:
             print('Playing games vs random bot')
             self._do_playouts(ScriptedBot.BOT_ID, 'random', self.num_games)
         print('Finished playing games')
@@ -102,7 +102,10 @@ class ScriptedDataset(Dataset):
 
     def load_data(self):
         for i, file in tqdm(enumerate(self.files), desc='Loading data'):
-            obs, act = torch.load(file)
+            try:  # Todo: remove later
+                obs, act = torch.load(file)
+            except:
+                print(file)
             pair = [obs['spatial_obs'], obs['non_spatial_obs'], obs['action_mask'], act]
             self.data[i] = pair
 
@@ -122,5 +125,5 @@ def get_scripted_dataset(paths=[scripted_data_path], training_percentage=0.9, ca
 
 
 if __name__ == '__main__':
-    generator = ScriptedDataGenerator(num_games=300)
+    generator = ScriptedDataGenerator(num_games=200)
     generator.generate_training_data(bot='random')

@@ -5,23 +5,23 @@ class A2C_Reward:
     # --- Reward function ---
     rewards_own = {
         OutcomeType.TOUCHDOWN: 1,
-        OutcomeType.SUCCESSFUL_CATCH: 0.1,
+        OutcomeType.SUCCESSFUL_CATCH: 0.2,
         OutcomeType.INTERCEPTION: 0.4,
-        OutcomeType.SUCCESSFUL_PICKUP: 0.2,
-        OutcomeType.FUMBLE: -0.4,
-        OutcomeType.KNOCKED_DOWN: -0.6,
-        OutcomeType.KNOCKED_OUT: -0.7,
+        OutcomeType.SUCCESSFUL_PICKUP: 0.5,
+        OutcomeType.FUMBLE: -0.5,
+        OutcomeType.KNOCKED_DOWN: -0.7,
+        OutcomeType.KNOCKED_OUT: -0.75,
         OutcomeType.CASUALTY: -0.8
     }
     rewards_opp = {
         OutcomeType.TOUCHDOWN: -1,
         OutcomeType.SUCCESSFUL_CATCH: -0.1,
-        OutcomeType.INTERCEPTION: -0.2,
-        OutcomeType.SUCCESSFUL_PICKUP: -0.1,
+        OutcomeType.INTERCEPTION: -0.1,
+        OutcomeType.SUCCESSFUL_PICKUP: -0.3,
         OutcomeType.FUMBLE: 0.1,
-        OutcomeType.KNOCKED_DOWN: 0.5,
-        OutcomeType.KNOCKED_OUT: 0.6,
-        OutcomeType.CASUALTY: 0.7
+        OutcomeType.KNOCKED_DOWN: 0.7,
+        OutcomeType.KNOCKED_OUT: 0.5,
+        OutcomeType.CASUALTY: 0.6
     }
     ball_progression_reward = 0.05
 

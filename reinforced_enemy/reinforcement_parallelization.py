@@ -7,6 +7,8 @@ import botbowl
 from botbowl.ai.env import BotBowlWrapper, PPCGWrapper
 from botbowl.ai.layers import *
 
+from Data.scripted_bot import ScriptedBot
+
 # When using A2CAgent, remember to set exclude_pathfinding_moves = False if you train with pathfinding_enabled = True
 
 
@@ -46,12 +48,13 @@ class Memory(object):
 
 
 def worker(remote, parent_remote, env: BotBowlWrapper, worker_id):
+    ScriptedBot.register_bot()
     parent_remote.close()
     reset_steps = 5000  # The environment is reset after this many steps it gets stuck
     steps = 0
     tds = 0
     tds_opp = 0
-    next_opp = botbowl.make_bot('random')
+    next_opp = next_opp = botbowl.make_bot(ScriptedBot.BOT_ID)  # botbowl.make_bot('random')
 
     ppcg_wrapper: Optional[PPCGWrapper] = env.get_wrapper_with_type(PPCGWrapper)
 
