@@ -17,7 +17,7 @@ class ConfigParams(Enum):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     num_steps = 5000000
     num_processes = 2
-    steps_per_update = 20
+    steps_per_update = 40
     learning_rate = 5e-6
     gamma = 0.99
     entropy_coef = 0.01
@@ -125,7 +125,11 @@ class CNNPolicy(nn.Module):
         # Spatial input stream
         self.conv1 = nn.Conv2d(spatial_shape[0], out_channels=kernels[0], kernel_size=4, stride=1, padding="same")
         # Residual block layers
-        self.conv_res = self._make_layer(ResidualBlock, kernels, 4)
+        # self.conv_res = self._make_layer(ResidualBlock, kernels, 4)
+        self.conv_res0 = ResidualBlock()
+        self.conv_res1 = ResidualBlock()
+        self.conv_res2 = ResidualBlock()
+        self.conv_res3 = ResidualBlock()
         # Non-spatial input stream
         self.linear0 = nn.Linear(non_spatial_inputs, hidden_nodes)
         self.linear1 = nn.Linear(hidden_nodes, hidden_nodes)
@@ -138,7 +142,8 @@ class CNNPolicy(nn.Module):
         self.linear7 = nn.Linear(hidden_nodes, hidden_nodes)
         self.linear_out = nn.Linear(hidden_nodes, 1)
         # Convolutions with channel attention
-        self.conv_ch = self._make_layer(ChannelAttention, [128, 64, 17], 1)
+        # self.conv_ch = self._make_layer(ChannelAttention, [128, 64, 17], 1)
+        self.conv_ch = ChannelAttention([128, 64, 17])
         #self.linear_actor = nn.Linear(1024, 25)
         self.linear_actor = nn.Linear(1024, 24)
 
@@ -168,8 +173,12 @@ class CNNPolicy(nn.Module):
         relu_gain = nn.init.calculate_gain('leaky_relu')
         self.conv1.weight.data.mul_(relu_gain)
         #self.conv_res.weight.data.mul_(relu_gain)
-        for res in self.conv_res:  # reset residual blocks
-            res.reset_parameters(relu_gain)
+        #for res in self.conv_res:  # reset residual blocks
+        #   res.reset_parameters(relu_gain)
+        self.conv_res0.reset_parameters(relu_gain)
+        self.conv_res1.reset_parameters(relu_gain)
+        self.conv_res2.reset_parameters(relu_gain)
+        self.conv_res3.reset_parameters(relu_gain)
         self.linear0.weight.data.mul_(relu_gain)
         self.linear1.weight.data.mul_(relu_gain)
         self.linear2.weight.data.mul_(relu_gain)
@@ -178,9 +187,9 @@ class CNNPolicy(nn.Module):
         self.linear5.weight.data.mul_(relu_gain)
         self.linear6.weight.data.mul_(relu_gain)
         self.linear7.weight.data.mul_(relu_gain)
-        for att in self.conv_ch:  # reset channel attention
-            att.reset_parameters(relu_gain)
-        # self.conv_ch.reset_parameters(relu_gain)
+        #for att in self.conv_ch:  # reset channel attention
+        #   att.reset_parameters(relu_gain)
+        self.conv_ch.reset_parameters(relu_gain)
         self.actor.weight.data.mul_(relu_gain)
         self.critic.weight.data.mul_(relu_gain)
 
@@ -191,7 +200,11 @@ class CNNPolicy(nn.Module):
         # Spatial input through two convolutional layers
 
         x1 = self.conv1(spatial_input)
-        x1 = self.conv_res(x1)
+        # x1 = self.conv_res(x1)  # todo check that, yields too big results
+        x1 = self.conv_res0(x1)
+        x1 = self.conv_res1(x1)
+        x1 = self.conv_res2(x1)
+        x1 = self.conv_res3(x1)
         x1_cat = torch.cat((x1, spatial_input), dim=1)
 
         # Concatenate the input streams
@@ -245,12 +258,12 @@ class CNNPolicy(nn.Module):
 
     def evaluate_actions(self, spatial_inputs, non_spatial_input, actions, actions_mask):
         value, policy = self(spatial_inputs, non_spatial_input)
-        actions_mask = actions_mask.view(-1, 1, actions_mask.shape[2]).squeeze().bool()
+        # actions_mask = actions_mask.view(-1, 1, actions_mask.shape[2]).squeeze().bool()
         policy[~actions_mask] = float('-inf')
         log_probs = F.log_softmax(policy, dim=1)
         probs = F.softmax(policy, dim=1)
         action_log_probs = log_probs.gather(1, actions)
-        log_probs = torch.where(log_probs[None, :] == float('-inf'), torch.tensor(0.), log_probs)
+        log_probs = torch.where(log_probs[None, :] == float('-inf'), torch.tensor(0.).to(next(self.parameters()).device), log_probs)
         dist_entropy = -(log_probs * probs).sum(-1).mean()
         return action_log_probs, value, dist_entropy
 
@@ -263,6 +276,14 @@ class CNNPolicy(nn.Module):
             actions[~action_mask] = float('-inf')
         action_probs = F.softmax(actions, dim=1)
         return values, action_probs
+
+    def get_action_log_probs(self, spatial_input, non_spatial_input, action_mask=None):
+        values, actions = self(spatial_input, non_spatial_input)
+        # Masking step: Inspired by: http://juditacs.github.io/2018/12/27/masked-attention.html
+        if action_mask is not None:
+            actions[~action_mask] = float('-inf')
+        log_probs = F.log_softmax(actions, dim=1)
+        return values, log_probs
 
 
 class A2CAgent(Agent):
@@ -279,11 +300,11 @@ class A2CAgent(Agent):
         self.action_queue = []
 
         # MODEL
-        # self.policy = CNNPolicy()  # For testing games
-        # self.policy.load_state_dict(torch.load(filename))
+        self.policy = CNNPolicy()  # For testing games
+        self.policy.load_state_dict(torch.load(filename))
         self.device = ConfigParams.device.value
-        self.policy = torch.load(filename)
-        self.policy.eval()
+        # self.policy = torch.load(filename)
+        # self.policy.eval()
         self.policy.to(self.device)
         self.end_setup = False
 
