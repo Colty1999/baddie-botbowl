@@ -110,29 +110,31 @@ class DQNLearner(Learner):
         self.network.to(self.device)
         self.target_network = self.model
         self.target_network.to(self.device)
-        self.network_optimizer = torch.optim.Adam(
-            self.network.parameters(), lr=ConfigParams.learning_rate.value
+        self.network_optimizer = optim.RAdam(
+            self.network.parameters(), ConfigParams.learning_rate.value, weight_decay=0.00001
         )
 
     def write_log(self):
         pass # Todo include logging (use Tensorboard?)
 
     def learning_step(self, data: tuple):
-        states, actions, rewards, next_states, dones, weights, idxes = data
+        spatial_obs, non_spatial_obs, actions, rewards, masks, action_masks = data
 
-        states = torch.FloatTensor(states).to(self.device)
+        spatial_obs = torch.FloatTensor(spatial_obs).to(self.device)
+        non_spatial_obs = torch.FloatTensor(non_spatial_obs).to(self.device)
         actions = torch.LongTensor(actions).to(self.device)
         rewards = torch.FloatTensor(rewards).to(self.device).view(-1, 1)
-        next_states = torch.FloatTensor(next_states).to(self.device)
-        dones = torch.FloatTensor(dones).to(self.device).view(-1, 1)
+        masks = torch.FloatTensor(masks).to(self.device)
+        action_masks = torch.FloatTensor(action_masks).to(self.device).view(-1, 1)
 
-        states.cuda(non_blocking=True)
+        spatial_obs.cuda(non_blocking=True)
+        non_spatial_obs.cuda(non_blocking=True)
         actions.cuda(non_blocking=True)
         rewards.cuda(non_blocking=True)
-        next_states.cuda(non_blocking=True)
-        dones.cuda(non_blocking=True)
+        masks.cuda(non_blocking=True)
+        action_masks.cuda(non_blocking=True)
 
-        curr_q = self.network.forward(states).gather(1, actions.unsqueeze(1))
+        curr_q = self.network.forward(spatial_obs, non_spatial_obs).gather(1, actions.unsqueeze(1))
         bootstrap_q = torch.max(self.target_network.forward(next_states), 1)[0]
 
         bootstrap_q = bootstrap_q.view(bootstrap_q.size(0), 1)
@@ -143,7 +145,7 @@ class DQNLearner(Learner):
 
         q_loss = (
             weights * F.smooth_l1_loss(curr_q, target_q.detach(), reduction="none")
-        ).mean()
+        ).mean()  #todo check if loss is appropriate
         dqn_reg = torch.norm(q_loss, 2).mean() * self.q_regularization
         loss = q_loss + dqn_reg
 
