@@ -14,7 +14,7 @@ class BaddieBotActor(botbowl.Agent):
     BOT_ID = 'Baddie'
 
     def __init__(self, name='BaddieBot', env_conf: EnvConf = EnvConf(size=11, pathfinding=True),
-                 model_path=ConfigParams.model_path.value):
+                 filename=ConfigParams.model_path.value):
         super().__init__(name)
 
         self.action_queue = []
@@ -33,9 +33,10 @@ class BaddieBotActor(botbowl.Agent):
         num_actions = len(action_mask)
 
         self.model = CNNPolicy(spatial_shape, num_non_spatial)
-        self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-        self.model.load_state_dict(torch.load(model_path, map_location=self.device))
-        self.model.eval()  # activate evaluation mode
+        self.device = ConfigParams.device.value
+        if model_path:
+            self.model.load_state_dict(torch.load(model_path, map_location=self.device))
+            self.model.eval()  # activate evaluation mode
         self.model.to(self.device)
 
     def new_game(self, game, team):
