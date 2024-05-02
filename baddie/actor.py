@@ -1,5 +1,5 @@
 import numpy as np
-
+import ray
 import torch
 
 import botbowl
@@ -9,6 +9,7 @@ from reinforced_enemy.reinforced_agent import make_env, ConfigParams  # todo Mak
 from network import CNNPolicy
 
 
+@ray.remote
 class BaddieBotActor(botbowl.Agent):
     BOT_ID = 'Baddie'
 
@@ -17,10 +18,11 @@ class BaddieBotActor(botbowl.Agent):
         super().__init__(name)
 
         self.action_queue = []
-        self.worker_buffer_size = 1000  # todo make configurable
+        self.gamma = ConfigParams.gamma.value
+        # todo make variables below configurable
+        self.worker_buffer_size = 1000
         self.eps_greedy = 0.3
         self.eps_decay = 0.95
-        self.gamma = ConfigParams.gamma.value
 
         self.env = botbowl.BotBowlEnv(env_conf)
         self.env.reset()
@@ -43,6 +45,20 @@ class BaddieBotActor(botbowl.Agent):
         self.own_team = team
         self.opp_team = game.get_opp_team(team)
         self.is_home = team == game.state.home_team
+
+    def sample(self, state):
+        self.eps_greedy = self.eps_greedy * self.eps_decay
+        if np.random.randn() < self.eps_greedy:
+            return self.env.action_space.sample()
+
+        spatial_obs, non_spatial_obs, action_mask = self.env.get_state()
+        spatial_obs = torch.from_numpy(np.stack(spatial_obs)[np.newaxis]).float().to(self.device)
+        non_spatial_obs = torch.from_numpy(np.stack(non_spatial_obs)[np.newaxis]).float().to(self.device)
+        action_mask = torch.tensor(action_mask, dtype=torch.bool).to(self.device)
+
+        _, actions = self.model.act(spatial_obs, non_spatial_obs, action_mask)
+
+        return actions
 
     def act(self, game):
         '''
