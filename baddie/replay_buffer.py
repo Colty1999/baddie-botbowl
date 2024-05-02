@@ -1,11 +1,18 @@
 import random
 import numpy as np
 
+import torch
+import pyarrow as pa
+import ray
+import zmq
+
 from utils.segtree import MinSegmentTree, SegmentTree, SumSegmentTree
+from reinforced_enemy.reinforced_agent import ConfigParams  # todo Make specific Conffig Params for DQN
+from network import spatial_obs_space, non_spatial_obs_space
 
 
 class ReplayBuffer(object):
-    def __init__(self, size):
+    def __init__(self, size, spatial=spatial_obs_space, non_spatial=non_spatial_obs_space, action_space=8116):
         """Create Replay buffer.
         Parameters
         ----------
@@ -17,11 +24,36 @@ class ReplayBuffer(object):
         self._maxsize = size
         self._next_idx = 0
 
+        action_shape = 1
+        self.spatial_obs = torch.zeros(ConfigParams.steps_per_update.value + 1,
+                                       ConfigParams.num_processes.value, *spatial)
+        self.non_spatial_obs = torch.zeros(ConfigParams.steps_per_update.value + 1,
+                                           ConfigParams.num_processes.value, *non_spatial)
+        self.rewards = torch.zeros(ConfigParams.steps_per_update.value, ConfigParams.num_processes.value, 1)
+        self.returns = torch.zeros(ConfigParams.steps_per_update.value + 1, ConfigParams.num_processes.value, 1)
+        self.actions = torch.zeros(ConfigParams.steps_per_update.value, ConfigParams.num_processes.value, action_shape)
+        self.actions = self.actions.long()
+        self.masks = torch.ones(ConfigParams.steps_per_update.value + 1, ConfigParams.num_processes.value,
+                                1)  # torch.ones(steps_per_update + 1, num_processes, 1)
+        self.action_masks = torch.zeros(ConfigParams.steps_per_update.value + 1,
+                                        ConfigParams.num_processes.value, action_space, dtype=torch.bool)
+
     def __len__(self):
         return len(self._storage)
 
-    def add(self, obs_t, action, reward, obs_tp1, done):
-        data = (obs_t, action, reward, obs_tp1, done)
+    def to(self, device):
+        self._storage = [item.to(device) for item in self._storage]
+        self.spatial_obs = self.spatial_obs.to(device)
+        self.non_spatial_obs = self.non_spatial_obs.to(device)
+        self.rewards = self.rewards.to(device)
+        self.returns = self.returns.to(device)
+        self.actions = self.actions.to(device)
+        self.masks = self.masks.to(device)
+        self.action_masks = self.action_masks.to(device)
+
+    def add(self, step, spatial_obs, non_spatial_obs, action, reward, mask, action_masks):
+        # data = (obs_t, action, reward, obs_tp1, done)
+        data = (spatial_obs, non_spatial_obs, action, reward, mask, action_masks)
 
         if self._next_idx >= len(self._storage):
             self._storage.append(data)
@@ -30,21 +62,23 @@ class ReplayBuffer(object):
         self._next_idx = (self._next_idx + 1) % self._maxsize
 
     def _encode_sample(self, idxes):
-        obses_t, actions, rewards, obses_tp1, dones = [], [], [], [], []
+        spatial_obs, non_spatial_obs, actions, rewards, masks, action_masks = [], [], [], [], [], []
         for i in idxes:
             data = self._storage[i]
-            obs_t, action, reward, obs_tp1, done = data
-            obses_t.append(np.array(obs_t, copy=False))
+            spatial, non_spatial, action, reward, mask, action_mask = data
+            spatial_obs.append(np.array(spatial, copy=False))
+            non_spatial.append(np.array(non_spatial_obs, copy=False))
             actions.append(np.array(action, copy=False))
             rewards.append(reward)
-            obses_tp1.append(np.array(obs_tp1, copy=False))
-            dones.append(done)
+            masks.append(np.array(mask, copy=False))
+            action_masks.append(np.array(action_mask, copy=False))
         return (
-            np.array(obses_t),
+            np.array(spatial_obs),
+            np.array(non_spatial_obs),
             np.array(actions),
             np.array(rewards),
-            np.array(obses_tp1),
-            np.array(dones),
+            np.array(masks),
+            np.array(action_mask)
         )
 
     def sample(self, batch_size):
@@ -184,3 +218,77 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             self._it_min[idx] = priority ** self._alpha
 
             self._max_priority = max(self._max_priority, priority)
+
+
+@ray.remote
+class PrioritizedReplayBufferHelper(object):
+    def __init__(self):
+
+        # todo make adjustable
+        self.max_num_updates = 100000
+        self.priority_alpha = 0.6
+        self.priority_beta = 0.4
+        self.priority_beta_end = 1.0
+        self.buffer_max_size = 1000000
+        self.priority_beta_increment = (
+            self.priority_beta_end - self.priority_beta
+        ) / self.max_num_updates
+
+        self.batch_size = 512
+
+        self.buffer = PrioritizedReplayBuffer(
+            size=self.buffer_max_size, alpha=self.priority_alpha
+        )
+
+        # unpack communication configs
+        self.repreq_port = 5556
+        self.pullpush_port = 5557
+
+        # initialize zmq sockets
+        print("[Buffer]: initializing sockets..")
+        self.initialize_sockets()
+
+    def initialize_sockets(self):
+        # for sending batch to learner and retrieving new priorities
+        context = zmq.Context()
+        self.rep_socket = context.socket(zmq.REQ)
+        self.rep_socket.connect(f"tcp://127.0.0.1:{self.repreq_port}")
+
+        # for receiving replay data from workers
+        context = zmq.Context()
+        self.pull_socket = context.socket(zmq.PULL)
+        self.pull_socket.bind(f"tcp://127.0.0.1:{self.pullpush_port}")
+
+    def send_batch_recv_priors(self):
+        # send batch and request priorities (blocking recv)
+        batch = self.buffer.sample(self.batch_size, self.priority_beta)
+        batch_id = pa.serialize(batch).to_buffer()
+        self.rep_socket.send(batch_id)
+
+        # receive and update priorities
+        new_priors_id = self.rep_socket.recv()
+        idxes, new_priorities = pa.deserialize(new_priors_id)
+        self.buffer.update_priorities(idxes, new_priorities)
+
+    def recv_data(self):
+        new_replay_data_id = False
+        try:
+            new_replay_data_id = self.pull_socket.recv(zmq.DONTWAIT)
+        except zmq.Again:
+            pass
+
+        if new_replay_data_id:
+            new_replay_data = pa.deserialize(new_replay_data_id)
+            for replay_data, priorities in new_replay_data:
+                self.buffer.add(*replay_data)
+                self.buffer.update_priorities(
+                    [(self.buffer._next_idx - 1) % self.buffer._maxsize], priorities
+                )
+
+    def run(self):
+        while True:
+            self.recv_data()
+            if len(self.buffer) > self.batch_size:
+                self.send_batch_recv_priors()
+            else:
+                pass
