@@ -1,4 +1,6 @@
+from enum import Enum
 import numpy as np
+import uuid
 
 import torch
 import torch.nn as nn
@@ -8,7 +10,39 @@ from torch.autograd import Variable
 import botbowl
 from botbowl.ai.env import EnvConf
 
-from reinforced_enemy.reinforced_agent import make_env, ConfigParams  # todo Make specific Conffig Params for DQN
+from reinforced_enemy.reinforced_agent import make_env
+
+
+class ConfigParams(Enum):
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    num_steps = 8000000
+    num_processes = 1 #todo make increasing number of processes possible in dqn
+    steps_per_update = 100 #1000
+    batch_size = 10 #100
+    learning_rate = 5e-6  # 5e-6
+    gamma = 0.99
+    tau = 0.01
+    gradient_clip = 10
+    q_regularization = 0.0
+    entropy_coef = 0.01
+    value_loss_coef = 0.5
+    max_grad_norm = 0.05
+    log_interval = 50
+    save_interval = 100
+    reset_steps = 5000  # The environment is reset after this many steps it gets stuck
+    selfplay_window = 5
+    selfplay_save_steps = int(num_steps / 100)
+    selfplay_swap_steps = selfplay_save_steps
+    num_hidden_nodes = 1024
+    ppcg = True
+    env_size = 11  # Options are 1,3,5,7,11
+    env_name = f"botbowl-{env_size}"
+    env_conf = EnvConf(size=env_size, pathfinding=False)
+    selfplay = False
+    exp_id = str(uuid.uuid1())
+    model_dir = f"models/{env_name}/"
+    model_path = f"models/{env_name}/old.nn" # 85b8d1d9-eacc-11ee-9651-d45d641e693d.nn" # a2c.pt
+
 
 env = make_env(ConfigParams.env_conf.value)
 spat_obs, non_spat_obs, action_mask = env.reset()
@@ -36,6 +70,7 @@ class ResidualBlock(nn.Module):
 
     def reset_parameters(self):
         relu_gain = nn.init.calculate_gain('leaky_relu')
+        self.conv0.weight.data.mul_(relu_gain)
         self.conv1.weight.data.mul_(relu_gain)
         self.conv2.weight.data.mul_(relu_gain)
         self.conv3.weight.data.mul_(relu_gain)
@@ -54,22 +89,22 @@ class ChannelAttention(nn.Module):
 
     def forward(self, x):#, latent_space):
         # out = torch.cat(F.leaky_relu(self.conv0(x[0])), F.sigmoid(F.leaky_relu(self.linear0(latent_space))))
+        sigmoid = F.sigmoid(F.leaky_relu(self.linear0(x[1])))
+        out = torch.multiply(F.leaky_relu(self.conv0(x[0])), sigmoid.view(sigmoid.size()[0], sigmoid.size()[1], 1, 1))
         sigmoid = F.sigmoid(F.leaky_relu(self.linear1(x[1])))
-        out = torch.multiply(F.leaky_relu(self.conv1(x[0])), sigmoid.view(sigmoid.size()[0], sigmoid.size()[1], 1, 1))
+        out = torch.multiply(F.leaky_relu(self.conv1(out)), sigmoid.view(sigmoid.size()[0], sigmoid.size()[1], 1, 1))
         sigmoid = F.sigmoid(F.leaky_relu(self.linear2(x[1])))
         out = torch.multiply(F.leaky_relu(self.conv2(out)), sigmoid.view(sigmoid.size()[0], sigmoid.size()[1], 1, 1))
-        sigmoid = F.sigmoid(F.leaky_relu(self.linear3(x[1])))
-        out = torch.multiply(F.leaky_relu(self.conv3(out)), sigmoid.view(sigmoid.size()[0], sigmoid.size()[1], 1, 1))
         return out
 
     def reset_parameters(self, relu_gain):
         sigmoid_gain = nn.init.calculate_gain('sigmoid')
+        self.conv0.weight.data.mul_(sigmoid_gain)
         self.conv1.weight.data.mul_(sigmoid_gain)
         self.conv2.weight.data.mul_(sigmoid_gain)
-        self.conv3.weight.data.mul_(sigmoid_gain)
+        self.linear0.weight.data.mul_(relu_gain)
         self.linear1.weight.data.mul_(relu_gain)
         self.linear2.weight.data.mul_(relu_gain)
-        self.linear3.weight.data.mul_(relu_gain)
 
 
 class CNNPolicy(nn.Module):
