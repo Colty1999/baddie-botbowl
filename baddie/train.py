@@ -78,12 +78,14 @@ def main(load_model=True, plot=False):
     else:
         make_dqn_from_model = partial(BaddieBotActor, env_conf=ConfigParams.env_conf.value, filename=None)
         dqn = CNNPolicy()
+        dqn.to(ConfigParams.device.value)
         target_dqn = CNNPolicy()
+        target_dqn.to(ConfigParams.device.value)
 
     loss_function = nn.NLLLoss()
     # OPTIMIZER
     optimizer = optim.RAdam(dqn.parameters(), ConfigParams.learning_rate.value, weight_decay=0.00001)
-
+    # todo implement BC
     # train_dataset, _ = get_scripted_dataset(training_percentage=1)
     # dataloader_train = get_dataloader(train_dataset, batch_size=5, num_workers=2)
     # dataloader_train_iter = iter(dataloader_train)
@@ -92,9 +94,9 @@ def main(load_model=True, plot=False):
     buffer = PrioritizedReplayBuffer()
     buffer.to(ConfigParams.device.value)
 
-    # PPCG
+    # todo PPCG
     difficulty = 0.0 if ConfigParams.ppcg.value else 0.0
-    dif_delta = 0.0005
+    # dif_delta = 0.0005
 
     # Variables for storing stats
     all_updates = 0
@@ -124,7 +126,7 @@ def main(load_model=True, plot=False):
     log_mean_reward = []
     log_difficulty = []
 
-    # self-play
+    # todo self-play
     selfplay_next_save = ConfigParams.selfplay_save_steps.value
     selfplay_next_swap = ConfigParams.selfplay_swap_steps.value
     selfplay_models = 0
@@ -157,10 +159,13 @@ def main(load_model=True, plot=False):
     buffer.action_masks[0].copy_(action_masks)
     buffer.to(ConfigParams.device.value)
     updates_num = ConfigParams.num_processes.value//ConfigParams.steps_per_update.value
+    non_spatial_obs = torch.squeeze(non_spatial_obs, dim=1)
+    spatial_obs, non_spatial_obs, action_masks = spatial_obs.numpy(force=True), non_spatial_obs.numpy(force=True), action_masks.numpy(force=True)
     pbar = tqdm.tqdm(desc="Updates", total=updates_num)
 
     while all_steps < ConfigParams.num_steps.value:
         torch.cuda.empty_cache()
+        # todo check if steps per update work well as buffer size
         for step in range(ConfigParams.steps_per_update.value):
 
             _, actions = dqn.act(buffer.spatial_obs[step], buffer.non_spatial_obs[step], buffer.action_masks[step], buffer.actions[step-1])
@@ -170,8 +175,11 @@ def main(load_model=True, plot=False):
 
             action_objects = (action[0] for action in actions.cpu().numpy())
 
-            spatial_obs, non_spatial_obs, action_masks, shaped_reward, tds_scored, tds_opp_scored, done = envs.step(
+            next_spatial_obs, next_non_spatial_obs, action_masks, shaped_reward, tds_scored, tds_opp_scored, done = envs.step(
                 action_objects, difficulty=difficulty)
+
+            if done:
+                stop = 1
 
             proc_rewards += shaped_reward
             proc_tds += tds_scored
@@ -210,7 +218,11 @@ def main(load_model=True, plot=False):
             # insert the step taken into buffer
             masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done])
 
-            buffer.insert(step, spatial_obs, non_spatial_obs, actions.data, shaped_reward, masks, action_masks)
+            buffer.add(
+                step, spatial_obs, non_spatial_obs, next_spatial_obs, next_non_spatial_obs,
+                actions.data, shaped_reward, masks, action_masks
+            )
+            spatial_obs, non_spatial_obs = next_spatial_obs, next_non_spatial_obs
 
         # -- TRAINING -- #
 
@@ -218,83 +230,38 @@ def main(load_model=True, plot=False):
         next_value = dqn(Variable(buffer.spatial_obs[-1], requires_grad=False),
                               Variable(buffer.non_spatial_obs[-1], requires_grad=False))[0].data
 
-        # Compute returns
-        buffer.compute_returns(next_value, ConfigParams.gamma.value)
+        # Sample data
+        # spatial_obs, non_spatial_obs, next_spatial_obs, next_non_spatial_obs, actions, shaped_reward, masks, action_masks
+        # todo simplify the process below
+        batch = buffer.sample(ConfigParams.batch_size.value, beta=0.4)
+        spatial_obs, non_spatial_obs, next_spatial_obs, next_non_spatial_obs, actions, shaped_reward, masks, action_masks, weights, idexes = batch
+        curr_q = dqn.forward(spatial_obs, non_spatial_obs).gather(1, actions.unsqueeze(1))
+        bootstrap_q = torch.max(target_dqn(spatial_obs,non_spatial_obs), 1)[0]
+        bootstrap_q = bootstrap_q.view(bootstrap_q.size(0), 1)
+        target_q = shaped_reward + (1 - masks) * ConfigParams.gamma.value ** ConfigParams.steps_per_update.value * bootstrap_q
+        weights = torch.FloatTensor(weights).to(ConfigParams.device.value)
+        weights.cuda(non_blocking=True)
+        weights = weights.mean()
 
-        spatial = Variable(buffer.spatial_obs[:-1])
-        spatial = spatial.view(-1, *spatial_obs_space)
-        non_spatial = Variable(buffer.non_spatial_obs[:-1])
-        non_spatial = non_spatial.view(-1, non_spatial.shape[-1])
+        q_loss = (
+                weights * torch.F.smooth_l1_loss(curr_q, target_q.detach(), reduction="none")
+        ).mean()
+        dqn_reg = torch.norm(q_loss, 2).mean() * ConfigParams.q_regularization.value
+        loss = q_loss + dqn_reg
 
-        actions = Variable(torch.LongTensor(buffer.actions.cpu().view(-1, 1)))
-        actions = actions.to(ConfigParams.device.value)
-        actions_mask = Variable(buffer.action_masks[:-1])
-        actions_mask = actions_mask.view(-1, action_space)
-        returns = Variable(buffer.returns[:-1])
-        returns = returns.view(-1, 1)
-        dataloader = DataLoader(TensorDataset(spatial, non_spatial, actions, actions_mask, returns),
-                                batch_size=5, shuffle=True)
-        for i, data in enumerate(dataloader):
-            print('rl model update steps:', i, end='\r')
-            eval_spatial, eval_non_spatial, eval_actions, eval_actions_mask, eval_returns = data
-            eval_spatial = eval_spatial.to(ConfigParams.device.value)
-            eval_non_spatial = eval_non_spatial.to(ConfigParams.device.value)
-            eval_actions = eval_actions.to(ConfigParams.device.value)
-            eval_actions_mask = eval_actions_mask.to(ConfigParams.device.value)
+        optimizer.zero_grad()
+        loss.backward()
+        #clip_grad_norm(dqn.parameters()) #, self.gradient_clip)
+        dqn.step()
+        #todo Stopped here
+        for target_param, param in zip(
+                target_dqn.parameters(), dqn.parameters()
+        ):
+            target_param.data.copy_(ConfigParams.tau.value * param + (1 - ConfigParams.tau.value) * target_param)
 
-            # Evaluate the actions taken
-            action_log_probs, values, dist_entropy = dqn.evaluate_actions(eval_spatial,
-                                                                               eval_non_spatial,
-                                                                               eval_actions,
-                                                                               eval_actions_mask)
-            # print(values.shape)
-            # print(action_log_probs.shape)
-            # print(eval_returns.shape)
-            # values = values.view(steps_per_update, num_processes, 1)
-            # action_log_probs = action_log_probs.view(steps_per_update, num_processes, 1)
-
-            advantages = eval_returns - values
-            value_loss = advantages.pow(2).mean()
-            # value_losses.append(value_loss)
-
-            # Compute loss
-            action_loss = -(Variable(advantages.data) * action_log_probs).mean()
-            # policy_losses.append(action_loss)
-
-            optimizer.zero_grad()
-
-            total_loss = (value_loss * ConfigParams.value_loss_coef.value + action_loss - dist_entropy * entropy_coef)
-            total_loss.backward()
-
-            nn.utils.clip_grad_norm_(dqn.parameters(), ConfigParams.max_grad_norm.value)
-
-            optimizer.step()
-
-        # print(returns.shape)
-
-        # # Evaluate the actions taken
-        # action_log_probs, values, dist_entropy = dqn.evaluate_actions(spatial, non_spatial, actions, actions_mask)
-        #
-        # values = values.view(ConfigParams.steps_per_update.value, ConfigParams.num_processes.value, 1)
-        # action_log_probs = action_log_probs.view(ConfigParams.steps_per_update.value, ConfigParams.num_processes.value, 1)
-        #
-        # advantages = Variable(buffer.returns[:-1]) - values
-        # value_loss = advantages.pow(2).mean()
-        # # value_losses.append(value_loss)
-        #
-        # # Compute loss
-        # action_loss = -(Variable(advantages.data) * action_log_probs).mean()
-        # # policy_losses.append(action_loss)
-        #
-        # optimizer.zero_grad()
-        #
-        # total_loss = (value_loss * ConfigParams.value_loss_coef.value + action_loss
-        #               - dist_entropy * ConfigParams.entropy_coef.value)
-        # total_loss.backward()
-        #
-        # nn.utils.clip_grad_norm_(dqn.parameters(), ConfigParams.max_grad_norm.value)
-        #
-        # optimizer.step()
+        new_priorities = torch.abs(target_q - curr_q).detach().view(-1)
+        new_priorities = torch.clamp(new_priorities, min=1e-8)
+        new_priorities = new_priorities.cpu().numpy().tolist()
 
         buffer.non_spatial_obs[0].copy_(buffer.non_spatial_obs[-1])
         buffer.spatial_obs[0].copy_(buffer.spatial_obs[-1])
@@ -336,46 +303,46 @@ def main(load_model=True, plot=False):
             spatial_obs, non_spatial_obs, action_masks, _, _, _, _ = map(torch.from_numpy, envs.reset(difficulty))
 
         # --- BC ---
-        for _ in range(ConfigParams.steps_per_update.value):
-            # get one batch from the dataset
-            # Todo remove redundancies below
-            is_spatial_zero = True
-            while is_spatial_zero:  # Todo fix the bug with all zeroes in spatial obs
-                try:
-                    spatial_obs, non_spatial_obs, action_mask, actions = next(dataloader_train_iter)
-                except StopIteration:  # if the iterator is empty, restart
-                    dataloader_train_iter = iter(dataloader_train)
-                    spatial_obs, non_spatial_obs, action_mask, actions = next(dataloader_train_iter)
-                finally:
-                    if torch.count_nonzero(spatial_obs) > 0:
-                        is_spatial_zero = False
-            # if isinstance(spatial_obs,np.ndarray):
-            #     spatial_obs = torch.from_numpy(spatial_obs.astype('float32'))
-            # if isinstance(non_spatial_obs,np.ndarray):
-            #     non_spatial_obs = torch.from_numpy(non_spatial_obs.astype('float32'))
-            # if isinstance(actions,np.ndarray):
-            #     actions = torch.from_numpy(actions.astype('float32'))
-            spatial_obs = spatial_obs.to(ConfigParams.device.value)
-            non_spatial_obs = non_spatial_obs.to(ConfigParams.device.value)
-            actions = actions.type(torch.LongTensor)  # Convert to Long to avoid not implemented for Int error
-            actions = actions.flatten().to(ConfigParams.device.value)
-
-            # zero the parameter gradients
-            optimizer.zero_grad()
-
-            # forward + backward + optimize
-            _, action_log_probs, = dqn.get_action_log_probs(spatial_obs, non_spatial_obs)
-
-            # actions = actions.to(ConfigParams.device.value)
-            loss = loss_function(action_log_probs, actions)
-            loss.backward()
-            optimizer.step()
-
-            train_loss = loss.item()
-            if train_loss == float('nan'):
-                print(f'Train Loss: {train_loss:.3f}')
-
-            all_steps += 5  # Todo make batch size adjustable
+        # for _ in range(ConfigParams.steps_per_update.value):
+        #     # get one batch from the dataset
+        #     # Todo remove redundancies below
+        #     is_spatial_zero = True
+        #     while is_spatial_zero:  # Todo fix the bug with all zeroes in spatial obs
+        #         try:
+        #             spatial_obs, non_spatial_obs, action_mask, actions = next(dataloader_train_iter)
+        #         except StopIteration:  # if the iterator is empty, restart
+        #             dataloader_train_iter = iter(dataloader_train)
+        #             spatial_obs, non_spatial_obs, action_mask, actions = next(dataloader_train_iter)
+        #         finally:
+        #             if torch.count_nonzero(spatial_obs) > 0:
+        #                 is_spatial_zero = False
+        #     # if isinstance(spatial_obs,np.ndarray):
+        #     #     spatial_obs = torch.from_numpy(spatial_obs.astype('float32'))
+        #     # if isinstance(non_spatial_obs,np.ndarray):
+        #     #     non_spatial_obs = torch.from_numpy(non_spatial_obs.astype('float32'))
+        #     # if isinstance(actions,np.ndarray):
+        #     #     actions = torch.from_numpy(actions.astype('float32'))
+        #     spatial_obs = spatial_obs.to(ConfigParams.device.value)
+        #     non_spatial_obs = non_spatial_obs.to(ConfigParams.device.value)
+        #     actions = actions.type(torch.LongTensor)  # Convert to Long to avoid not implemented for Int error
+        #     actions = actions.flatten().to(ConfigParams.device.value)
+        #
+        #     # zero the parameter gradients
+        #     optimizer.zero_grad()
+        #
+        #     # forward + backward + optimize
+        #     _, action_log_probs, = dqn.get_action_log_probs(spatial_obs, non_spatial_obs)
+        #
+        #     # actions = actions.to(ConfigParams.device.value)
+        #     loss = loss_function(action_log_probs, actions)
+        #     loss.backward()
+        #     optimizer.step()
+        #
+        #     train_loss = loss.item()
+        #     if train_loss == float('nan'):
+        #         print(f'Train Loss: {train_loss:.3f}')
+        #
+        #     all_steps += 5  # Todo make batch size adjustable
 
         # Logging
         if all_updates % ConfigParams.log_interval.value == 0 \
@@ -482,4 +449,4 @@ def main(load_model=True, plot=False):
 
 
 if __name__ == "__main__":
-    main()
+    main(load_model=False)
