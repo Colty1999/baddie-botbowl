@@ -7,12 +7,19 @@ import ray
 import zmq
 
 from utils.segtree import MinSegmentTree, SegmentTree, SumSegmentTree
-from reinforced_enemy.reinforced_agent import ConfigParams  # todo Make specific Conffig Params for DQN
-from network import spatial_obs_space, non_spatial_obs_space
+from network import ConfigParams, make_env
+
+#todo deal with code repetitions
+env = make_env(ConfigParams.env_conf.value)
+spat_obs, non_spat_obs, action_mask = env.reset()
+spatial_obs_space = spat_obs.shape
+non_spatial_obs_space = non_spat_obs.shape[0]
+action_space = len(action_mask)
 
 
 class ReplayBuffer(object):
-    def __init__(self, size, spatial=spatial_obs_space, non_spatial=non_spatial_obs_space, action_space=8116):
+    def __init__(self, size=ConfigParams.steps_per_update.value,
+                 spatial=spatial_obs_space, non_spatial=(1, non_spatial_obs_space), action_space=8116):
         """Create Replay buffer.
         Parameters
         ----------
@@ -51,9 +58,15 @@ class ReplayBuffer(object):
         self.masks = self.masks.to(device)
         self.action_masks = self.action_masks.to(device)
 
-    def add(self, step, spatial_obs, non_spatial_obs, action, reward, mask, action_masks):
+    def add(self, step, spatial_obs, non_spatial_obs, next_spatial_obs, next_non_spatial_obs, action, reward, mask, action_masks):
+        self.spatial_obs[step + 1].copy_(torch.from_numpy(spatial_obs).float())
+        self.non_spatial_obs[step + 1].copy_(torch.from_numpy(np.expand_dims(non_spatial_obs, axis=1)).float())
+        self.actions[step].copy_(action)
+        self.rewards[step].copy_(torch.from_numpy(np.expand_dims(reward, 1)).float())
+        self.masks[step].copy_(mask)
+        self.action_masks[step + 1].copy_(torch.from_numpy(action_masks))
         # data = (obs_t, action, reward, obs_tp1, done)
-        data = (spatial_obs, non_spatial_obs, action, reward, mask, action_masks)
+        data = (spatial_obs, non_spatial_obs, next_spatial_obs, next_non_spatial_obs, action, reward, mask, action_masks)
 
         if self._next_idx >= len(self._storage):
             self._storage.append(data)
@@ -62,19 +75,23 @@ class ReplayBuffer(object):
         self._next_idx = (self._next_idx + 1) % self._maxsize
 
     def _encode_sample(self, idxes):
-        spatial_obs, non_spatial_obs, actions, rewards, masks, action_masks = [], [], [], [], [], []
+        spatial_obs, non_spatial_obs, next_spatial_obs, next_non_spatial_obs, actions, rewards, masks, action_masks = [], [], [], [], [], [], [], []
         for i in idxes:
             data = self._storage[i]
-            spatial, non_spatial, action, reward, mask, action_mask = data
+            spatial, non_spatial, next_spatial, next_non_spatial, action, reward, mask, action_mask = data
             spatial_obs.append(np.array(spatial, copy=False))
-            non_spatial.append(np.array(non_spatial_obs, copy=False))
-            actions.append(np.array(action, copy=False))
+            non_spatial_obs.append(np.array(non_spatial, copy=False))
+            next_spatial_obs.append(np.array(next_spatial, copy=False))
+            next_non_spatial_obs.append(np.array(next_non_spatial, copy=False))
+            actions.append(np.array(action.to("cpu"), copy=False))
             rewards.append(reward)
             masks.append(np.array(mask, copy=False))
             action_masks.append(np.array(action_mask, copy=False))
         return (
             np.array(spatial_obs),
             np.array(non_spatial_obs),
+            np.array(next_spatial_obs),
+            np.array(next_non_spatial_obs),
             np.array(actions),
             np.array(rewards),
             np.array(masks),
@@ -106,7 +123,7 @@ class ReplayBuffer(object):
 
 
 class PrioritizedReplayBuffer(ReplayBuffer):
-    def __init__(self, size, alpha):
+    def __init__(self, size=ConfigParams.steps_per_update.value, alpha=0.6):
         """Create Prioritized Replay buffer.
         Parameters
         ----------
