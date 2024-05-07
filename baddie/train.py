@@ -8,6 +8,7 @@ import os
 import random
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.autograd import Variable
 from torch.utils.data import TensorDataset, DataLoader
@@ -178,7 +179,7 @@ def main(load_model=True, plot=False):
             next_spatial_obs, next_non_spatial_obs, action_masks, shaped_reward, tds_scored, tds_opp_scored, done = envs.step(
                 action_objects, difficulty=difficulty)
 
-            if done:
+            if step == 9:
                 stop = 1
 
             proc_rewards += shaped_reward
@@ -217,11 +218,14 @@ def main(load_model=True, plot=False):
 
             # insert the step taken into buffer
             masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done])
+            try:
+                buffer.add(
+                    step, spatial_obs, non_spatial_obs, next_spatial_obs, next_non_spatial_obs,
+                    actions.data, shaped_reward, masks, action_masks
+                )
+            except:
+                stop = 1
 
-            buffer.add(
-                step, spatial_obs, non_spatial_obs, next_spatial_obs, next_non_spatial_obs,
-                actions.data, shaped_reward, masks, action_masks
-            )
             spatial_obs, non_spatial_obs = next_spatial_obs, next_non_spatial_obs
 
         # -- TRAINING -- #
@@ -234,17 +238,32 @@ def main(load_model=True, plot=False):
         # spatial_obs, non_spatial_obs, next_spatial_obs, next_non_spatial_obs, actions, shaped_reward, masks, action_masks
         # todo simplify the process below
         batch = buffer.sample(ConfigParams.batch_size.value, beta=0.4)
-        spatial_obs, non_spatial_obs, next_spatial_obs, next_non_spatial_obs, actions, shaped_reward, masks, action_masks, weights, idexes = batch
-        curr_q = dqn.forward(spatial_obs, non_spatial_obs).gather(1, actions.unsqueeze(1))
-        bootstrap_q = torch.max(target_dqn(spatial_obs,non_spatial_obs), 1)[0]
-        bootstrap_q = bootstrap_q.view(bootstrap_q.size(0), 1)
-        target_q = shaped_reward + (1 - masks) * ConfigParams.gamma.value ** ConfigParams.steps_per_update.value * bootstrap_q
+        batch_spatial_obs, batch_non_spatial_obs, batch_actions, batch_shaped_reward, batch_masks, batch_action_masks, weights, idexes = batch
+        #todo check if works as intended/is needed
+        spatial = Variable(batch_spatial_obs)
+        spatial = spatial.view(-1, *spatial_obs_space)
+        non_spatial = Variable(batch_non_spatial_obs)
+        non_spatial = non_spatial.view(-1, non_spatial.shape[-1])
+        # a = actions.unsqueeze(1)
+        batch_actions = Variable(torch.LongTensor(batch_actions.cpu().view(-1, 1)))
+        batch_actions = batch_actions.to(ConfigParams.device.value)
+        batch_actions_mask = Variable(batch_action_masks)
+        batch_actions_mask = batch_actions_mask.view(-1, action_space)
+        batch_shaped_reward = Variable(batch_shaped_reward.view(-1, 1))
+        batch_masks = Variable(batch_masks.view(-1, 1))
+
+        _, curr_q = dqn.forward(spatial, non_spatial)  #todo make more efficient
+        # a = actions.unsqueeze(0)
+        curr_q = curr_q.gather(1, batch_actions)
+        _, bootstrap_q = target_dqn(spatial, non_spatial)
+        bootstrap_q = torch.max(bootstrap_q,1)[0].view(bootstrap_q.size(0), 1)
+        target_q = batch_shaped_reward + (1 - batch_masks) * ConfigParams.gamma.value ** ConfigParams.steps_per_update.value * bootstrap_q
         weights = torch.FloatTensor(weights).to(ConfigParams.device.value)
         weights.cuda(non_blocking=True)
         weights = weights.mean()
 
         q_loss = (
-                weights * torch.F.smooth_l1_loss(curr_q, target_q.detach(), reduction="none")
+                weights * F.smooth_l1_loss(curr_q, target_q.detach(), reduction="none")
         ).mean()
         dqn_reg = torch.norm(q_loss, 2).mean() * ConfigParams.q_regularization.value
         loss = q_loss + dqn_reg
@@ -252,8 +271,8 @@ def main(load_model=True, plot=False):
         optimizer.zero_grad()
         loss.backward()
         #clip_grad_norm(dqn.parameters()) #, self.gradient_clip)
-        dqn.step()
-        #todo Stopped here
+        optimizer.step()
+
         for target_param, param in zip(
                 target_dqn.parameters(), dqn.parameters()
         ):
@@ -262,6 +281,11 @@ def main(load_model=True, plot=False):
         new_priorities = torch.abs(target_q - curr_q).detach().view(-1)
         new_priorities = torch.clamp(new_priorities, min=1e-8)
         new_priorities = new_priorities.cpu().numpy().tolist()
+
+        # for priorities in new_priorities:
+        buffer.update_priorities(
+            idexes, new_priorities
+        )
 
         buffer.non_spatial_obs[0].copy_(buffer.non_spatial_obs[-1])
         buffer.spatial_obs[0].copy_(buffer.spatial_obs[-1])
