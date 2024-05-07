@@ -66,7 +66,16 @@ class ReplayBuffer(object):
         self.masks[step].copy_(mask)
         self.action_masks[step + 1].copy_(torch.from_numpy(action_masks))
         # data = (obs_t, action, reward, obs_tp1, done)
-        data = (spatial_obs, non_spatial_obs, next_spatial_obs, next_non_spatial_obs, action, reward, mask, action_masks)
+        data = (
+            torch.from_numpy(spatial_obs).float(),
+            torch.from_numpy(np.expand_dims(non_spatial_obs, axis=1)).float(),
+            torch.from_numpy(next_spatial_obs).float(),
+            torch.from_numpy(next_non_spatial_obs).float(),
+            action,
+            torch.from_numpy(reward).float(),
+            mask,
+            torch.from_numpy(action_masks).float()
+        )  # todo make it more efficient
 
         if self._next_idx >= len(self._storage):
             self._storage.append(data)
@@ -75,27 +84,26 @@ class ReplayBuffer(object):
         self._next_idx = (self._next_idx + 1) % self._maxsize
 
     def _encode_sample(self, idxes):
+        #todo make more efficient
         spatial_obs, non_spatial_obs, next_spatial_obs, next_non_spatial_obs, actions, rewards, masks, action_masks = [], [], [], [], [], [], [], []
         for i in idxes:
             data = self._storage[i]
             spatial, non_spatial, next_spatial, next_non_spatial, action, reward, mask, action_mask = data
-            spatial_obs.append(np.array(spatial, copy=False))
-            non_spatial_obs.append(np.array(non_spatial, copy=False))
-            next_spatial_obs.append(np.array(next_spatial, copy=False))
-            next_non_spatial_obs.append(np.array(next_non_spatial, copy=False))
-            actions.append(np.array(action.to("cpu"), copy=False))
+            spatial_obs.append(spatial)
+            non_spatial_obs.append(non_spatial)
+            next_spatial_obs.append(next_spatial)
+            next_non_spatial_obs.append(next_non_spatial)
+            actions.append(action.to("cpu"))
             rewards.append(reward)
-            masks.append(np.array(mask, copy=False))
-            action_masks.append(np.array(action_mask, copy=False))
+            masks.append(mask)
+            action_masks.append(action_mask)
         return (
-            np.array(spatial_obs),
-            np.array(non_spatial_obs),
-            np.array(next_spatial_obs),
-            np.array(next_non_spatial_obs),
-            np.array(actions),
-            np.array(rewards),
-            np.array(masks),
-            np.array(action_mask)
+            self.spatial_obs[idxes],
+            self.non_spatial_obs[idxes],
+            self.actions[idxes],
+            self.rewards[idxes],
+            self.masks[idxes],
+            self.action_masks[idxes]
         )
 
     def sample(self, batch_size):
