@@ -179,9 +179,6 @@ def main(load_model=True, plot=False):
             next_spatial_obs, next_non_spatial_obs, action_masks, shaped_reward, tds_scored, tds_opp_scored, done = envs.step(
                 action_objects, difficulty=difficulty)
 
-            if step == 9:
-                stop = 1
-
             proc_rewards += shaped_reward
             proc_tds += tds_scored
             proc_tds_opp += tds_opp_scored
@@ -218,13 +215,11 @@ def main(load_model=True, plot=False):
 
             # insert the step taken into buffer
             masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done])
-            try:
-                buffer.add(
-                    step, spatial_obs, non_spatial_obs, next_spatial_obs, next_non_spatial_obs,
-                    actions.data, shaped_reward, masks, action_masks
-                )
-            except:
-                stop = 1
+
+            buffer.add(
+                step, spatial_obs, non_spatial_obs, next_spatial_obs, next_non_spatial_obs,
+                actions.data, shaped_reward, masks, action_masks
+            )
 
             spatial_obs, non_spatial_obs = next_spatial_obs, next_non_spatial_obs
 
