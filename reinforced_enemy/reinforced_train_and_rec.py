@@ -22,6 +22,8 @@ from reinforcement_parallelization import VecEnv, Memory
 from Data.generator import get_scripted_dataset, scripted_data_path
 from scripted_behaviour_cloning import get_dataloader
 
+from Data.scripted_bot import ScriptedBot
+import botbowl.core.procedure as procedure
 # Todo split training and recording functionalities into separate files to add readability
 
 num_cnn_kernels = [32, 64]
@@ -37,21 +39,43 @@ def ensure_dirs():
             os.makedirs(dir)
 
 
+def scripted_func(game):
+    proc_type = type(game.get_procedure())
+    scripted_bot = ScriptedBot(name='MyScriptedBot', out_path="./scripted_dataset", dump=False)
+    if proc_type is procedure.Block:
+        return scripted_bot.block(game=game)
+    elif proc_type is procedure.CoinTossFlip:
+        return scripted_bot.coin_toss_flip(game=game)
+    elif proc_type is procedure.CoinTossKickReceive:
+        return scripted_bot.coin_toss_kick_receive(game=game)
+    elif proc_type is procedure.Reroll:
+        return scripted_bot.reroll(game=game)
+    elif proc_type is procedure.PlaceBall:
+        return scripted_bot.place_ball(game=game)
+    available_action_types = [action_choice.action_type for action_choice in game.get_available_actions()]
+    if len(available_action_types) == 1 and len(game.get_available_actions()[0].positions) == 0 and len(game.get_available_actions()[0].players) == 0:
+         return botbowl.Action(available_action_types[0])
+    if botbowl.ActionType.END_PLAYER_TURN in available_action_types:
+        return botbowl.Action(botbowl.ActionType.END_PLAYER_TURN)
+    return None
+
 def make_env(env_conf, ppcg=ConfigParams.ppcg.value):
     env = BotBowlEnv(env_conf)
     if ppcg:
         env = PPCGWrapper(env)
-    # env = ScriptedActionWrapper(env, scripted_func=a2c_scripted_actions)
+    env = ScriptedActionWrapper(env, scripted_func=scripted_func)
     env = RewardWrapper(env, home_reward_func=A2C_Reward())
     return env
 
-
 def main(plot=False):
+    print(torch.cuda.is_available())
+    torch.set_num_threads(18)
+    print(torch.get_num_threads())
     torch.cuda.empty_cache()
     ensure_dirs()
 
     envs = VecEnv([make_env(ConfigParams.env_conf.value) for _ in range(ConfigParams.num_processes.value)])
-    make_agent_from_model = partial(A2CAgent, env_conf=ConfigParams.env_conf.value, filename=ConfigParams.model_path.value)  # , scripted_func=a2c_scripted_actions)
+    make_agent_from_model = partial(A2CAgent, env_conf=ConfigParams.env_conf.value, filename=ConfigParams.model_path.value, scripted_func=scripted_func)
 
     env = make_env(ConfigParams.env_conf.value)
     spat_obs, non_spat_obs, action_mask = env.reset()

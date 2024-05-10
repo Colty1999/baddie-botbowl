@@ -74,9 +74,9 @@ def a2c_scripted_actions(game: Game):
     proc_type = type(game.get_procedure())
     if proc_type is procedure.Block:
         # noinspection PyTypeChecker
-        return ScriptedBot.block(self=None, game=game)
+        return ScriptedBot.block(self=ScriptedBot, game=game)
     if proc_type is procedure.CoinTossFlip:
-        return ScriptedBot.coin_toss_flip(self=None, game=game)
+        return ScriptedBot.coin_toss_flip(self=ScriptedBot, game=game)
     if proc_type is procedure.CoinTossKickReceive:
         return ScriptedBot.coin_toss_kick_receive(self=None, game=game)
     if proc_type is ScriptedBot.PlaceBall:
