@@ -15,33 +15,36 @@ from reinforced_enemy.reinforced_agent import make_env
 
 class ConfigParams(Enum):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    num_steps = 8000000
-    num_processes = 1 #todo make increasing number of processes possible in dqn
-    steps_per_update = 100 #1000
-    batch_size = 10 #100
+    num_steps = 80000000
+    num_processes = 4 # was 5
+    steps_per_update = 20 #10  # 50 # 1000
+    batch_size = 32 #32  # 512  # generally the size should be the 2^n, the bigger it is the higher the exploration, but slower learning
+    buffer_size = 256
+    multiple_updates = 4
     learning_rate = 5e-6  # 5e-6
     gamma = 0.99
     tau = 0.01
-    gradient_clip = 10
-    q_regularization = 0.0
+    gradient_clip = 0.05#10 #1.5 # was 10
+    q_regularization = 0.001 #0.0
     entropy_coef = 0.01
     value_loss_coef = 0.5
     max_grad_norm = 0.05
-    log_interval = 50
-    save_interval = 100
+    log_interval = 25
+    save_interval = 50
     reset_steps = 5000  # The environment is reset after this many steps it gets stuck
     selfplay_window = 5
-    selfplay_save_steps = int(num_steps / 100)
+    selfplay_save_steps = int(num_steps / 100000)
     selfplay_swap_steps = selfplay_save_steps
     num_hidden_nodes = 1024
     ppcg = True
     env_size = 11  # Options are 1,3,5,7,11
     env_name = f"botbowl-{env_size}"
-    env_conf = EnvConf(size=env_size, pathfinding=False)
-    selfplay = False
+    env_conf = EnvConf(size=env_size, pathfinding=True)  # pathfinndng=False
+    selfplay = False  #todo make it work
     exp_id = str(uuid.uuid1())
     model_dir = f"models/{env_name}/"
-    model_path = f"models/{env_name}/old.nn" # 85b8d1d9-eacc-11ee-9651-d45d641e693d.nn" # a2c.pt
+    model_path = f"models/{env_name}/best_at_random.nn"
+    agent_path = f"models/{env_name}/best.nn"  # bc_model.nn"
 
 
 env = make_env(ConfigParams.env_conf.value)
@@ -57,14 +60,14 @@ class ResidualBlock(nn.Module):
         self.conv0 = nn.Conv2d(in_channels=kernels[0], out_channels=kernels[1], kernel_size=3, stride=1, padding="same")
         self.conv1 = nn.Conv2d(in_channels=kernels[0], out_channels=kernels[1], kernel_size=3, stride=1, padding="same")
         self.conv2 = nn.Conv2d(in_channels=kernels[0], out_channels=kernels[1], kernel_size=3, stride=1, padding="same")
-        self.conv3 = nn.Conv2d(in_channels=kernels[0], out_channels=kernels[1], kernel_size=3, stride=1, padding="same")
+        #self.conv3 = nn.Conv2d(in_channels=kernels[0], out_channels=kernels[1], kernel_size=3, stride=1, padding="same")
 
     def forward(self, x):
         residual = x
         out = F.leaky_relu(self.conv0(x))
         out = F.leaky_relu(self.conv1(out))
         out = F.leaky_relu(self.conv2(out))
-        out = F.leaky_relu(self.conv3(out))
+        #out = F.leaky_relu(self.conv3(out))
         out += residual
         return out
 
@@ -73,7 +76,7 @@ class ResidualBlock(nn.Module):
         self.conv0.weight.data.mul_(relu_gain)
         self.conv1.weight.data.mul_(relu_gain)
         self.conv2.weight.data.mul_(relu_gain)
-        self.conv3.weight.data.mul_(relu_gain)
+        #self.conv3.weight.data.mul_(relu_gain)
 
 
 class ChannelAttention(nn.Module):
@@ -90,11 +93,11 @@ class ChannelAttention(nn.Module):
     def forward(self, x):#, latent_space):
         # out = torch.cat(F.leaky_relu(self.conv0(x[0])), F.sigmoid(F.leaky_relu(self.linear0(latent_space))))
         sigmoid = F.sigmoid(F.leaky_relu(self.linear0(x[1])))
-        out = torch.multiply(F.leaky_relu(self.conv0(x[0])), sigmoid.view(sigmoid.size()[0], sigmoid.size()[1], 1, 1))
+        out = torch.multiply(self.conv0(x[0]), sigmoid.view(sigmoid.size()[0], sigmoid.size()[1], 1, 1))
         sigmoid = F.sigmoid(F.leaky_relu(self.linear1(x[1])))
-        out = torch.multiply(F.leaky_relu(self.conv1(out)), sigmoid.view(sigmoid.size()[0], sigmoid.size()[1], 1, 1))
+        out = torch.multiply(self.conv1(out), sigmoid.view(sigmoid.size()[0], sigmoid.size()[1], 1, 1))
         sigmoid = F.sigmoid(F.leaky_relu(self.linear2(x[1])))
-        out = torch.multiply(F.leaky_relu(self.conv2(out)), sigmoid.view(sigmoid.size()[0], sigmoid.size()[1], 1, 1))
+        out = torch.multiply(self.conv2(out), sigmoid.view(sigmoid.size()[0], sigmoid.size()[1], 1, 1))
         return out
 
     def reset_parameters(self, relu_gain):
@@ -195,7 +198,8 @@ class CNNPolicy(nn.Module):
         x1 = self.conv_res1(x1)
         x1 = self.conv_res2(x1)
         x1 = self.conv_res3(x1)
-        x1_cat = torch.cat((x1, spatial_input), dim=1)
+        #x1_cat = torch.cat((x1, spatial_input), dim=1)
+        x1_cat = torch.cat((spatial_input, x1), dim=1)
 
         # Concatenate the input streams
         flatten_x1 = x1.flatten(start_dim=1)
@@ -218,7 +222,8 @@ class CNNPolicy(nn.Module):
         x4 = self.conv_ch((x1_cat, x3))
         x4_flatten = x4.flatten(start_dim=1)
         x5 = self.linear_actor(x3)
-        actor = torch.cat((x4_flatten, x5), dim=1)
+        x5_flatten = x5.flatten(start_dim=1)
+        actor = torch.cat((x4_flatten, x5_flatten), dim=1)
 
         # Output streams
         value = self.linear_out(x3)
@@ -274,3 +279,4 @@ class CNNPolicy(nn.Module):
             actions[~action_mask] = float('-inf')
         log_probs = F.log_softmax(actions, dim=1)
         return values, log_probs
+
