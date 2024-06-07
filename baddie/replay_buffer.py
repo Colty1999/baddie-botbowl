@@ -18,7 +18,8 @@ action_space = len(action_mask)
 
 
 class ReplayBuffer(object):
-    def __init__(self, size=ConfigParams.steps_per_update.value,
+    def __init__(self, size=ConfigParams.buffer_size.value,
+                 # The size value should be large enough to avoid overfitting but not too big to slow down learining
                  spatial=spatial_obs_space, non_spatial=(1, non_spatial_obs_space), action_space=8116):
         """Create Replay buffer.
         Parameters
@@ -28,30 +29,48 @@ class ReplayBuffer(object):
             overflows the old memories are dropped.
         """
         self._storage = []
+        # self._storage_size = 0 #[] #todo replace storage with storage size in the future
         self._maxsize = size
         self._next_idx = 0
 
         action_shape = 1
-        self.spatial_obs = torch.zeros(ConfigParams.steps_per_update.value + 1,
-                                       ConfigParams.num_processes.value, *spatial)
-        self.non_spatial_obs = torch.zeros(ConfigParams.steps_per_update.value + 1,
-                                           ConfigParams.num_processes.value, *non_spatial)
-        self.rewards = torch.zeros(ConfigParams.steps_per_update.value, ConfigParams.num_processes.value, 1)
-        self.returns = torch.zeros(ConfigParams.steps_per_update.value + 1, ConfigParams.num_processes.value, 1)
-        self.actions = torch.zeros(ConfigParams.steps_per_update.value, ConfigParams.num_processes.value, action_shape)
+        # self.spatial_obs = torch.zeros(ConfigParams.steps_per_update.value + 1,
+        #                                ConfigParams.num_processes.value, *spatial)
+        # self.non_spatial_obs = torch.zeros(ConfigParams.steps_per_update.value + 1,
+        #                                    ConfigParams.num_processes.value, *non_spatial)
+        # self.next_spatial_obs = torch.zeros(ConfigParams.steps_per_update.value + 1,
+        #                                ConfigParams.num_processes.value, *spatial)
+        # self.next_non_spatial_obs = torch.zeros(ConfigParams.steps_per_update.value + 1,
+        #                                    ConfigParams.num_processes.value, *non_spatial)
+        # self.rewards = torch.zeros(ConfigParams.steps_per_update.value, ConfigParams.num_processes.value, 1)
+        # self.returns = torch.zeros(ConfigParams.steps_per_update.value + 1, ConfigParams.num_processes.value, 1)
+        # self.actions = torch.zeros(ConfigParams.steps_per_update.value, ConfigParams.num_processes.value, action_shape)
+        # self.actions = self.actions.long()
+        # self.masks = torch.ones(ConfigParams.steps_per_update.value + 1, ConfigParams.num_processes.value,
+        #                         1)  # torch.ones(steps_per_update + 1, num_processes, 1)
+        # self.action_masks = torch.zeros(ConfigParams.steps_per_update.value + 1,
+        #                                 ConfigParams.num_processes.value, action_space, dtype=torch.bool)
+
+        self.spatial_obs = torch.zeros(size + 1, ConfigParams.num_processes.value, *spatial)
+        self.non_spatial_obs = torch.zeros(size + 1, ConfigParams.num_processes.value, *non_spatial)
+        self.next_spatial_obs = torch.zeros(size + 1, ConfigParams.num_processes.value, *spatial)
+        self.next_non_spatial_obs = torch.zeros(size + 1, ConfigParams.num_processes.value, *non_spatial)
+        self.rewards = torch.zeros(size, ConfigParams.num_processes.value, 1)
+        self.returns = torch.zeros(size + 1, ConfigParams.num_processes.value, 1)
+        self.actions = torch.zeros(size, ConfigParams.num_processes.value, action_shape)
         self.actions = self.actions.long()
-        self.masks = torch.ones(ConfigParams.steps_per_update.value + 1, ConfigParams.num_processes.value,
-                                1)  # torch.ones(steps_per_update + 1, num_processes, 1)
-        self.action_masks = torch.zeros(ConfigParams.steps_per_update.value + 1,
-                                        ConfigParams.num_processes.value, action_space, dtype=torch.bool)
+        self.masks = torch.ones(size + 1, ConfigParams.num_processes.value, 1)  # torch.ones(steps_per_update + 1, num_processes, 1)
+        self.action_masks = torch.zeros(size + 1, ConfigParams.num_processes.value, action_space, dtype=torch.bool)
 
     def __len__(self):
-        return len(self._storage)
+        return len(self._storage)  #  self._storage_size
 
     def to(self, device):
         self._storage = [item.to(device) for item in self._storage]
         self.spatial_obs = self.spatial_obs.to(device)
         self.non_spatial_obs = self.non_spatial_obs.to(device)
+        self.next_spatial_obs = self.spatial_obs.to(device)
+        self.next_non_spatial_obs = self.non_spatial_obs.to(device)
         self.rewards = self.rewards.to(device)
         self.returns = self.returns.to(device)
         self.actions = self.actions.to(device)
@@ -59,13 +78,25 @@ class ReplayBuffer(object):
         self.action_masks = self.action_masks.to(device)
 
     def add(self, step, spatial_obs, non_spatial_obs, next_spatial_obs, next_non_spatial_obs, action, reward, mask, action_masks):
-        self.spatial_obs[step + 1].copy_(torch.from_numpy(spatial_obs).float())
-        self.non_spatial_obs[step + 1].copy_(torch.from_numpy(np.expand_dims(non_spatial_obs, axis=1)).float())
-        self.actions[step].copy_(action)
-        self.rewards[step].copy_(torch.from_numpy(np.expand_dims(reward, 1)).float())
-        self.masks[step].copy_(mask)
-        self.action_masks[step + 1].copy_(torch.from_numpy(action_masks))
+        # self.spatial_obs[step + 1].copy_(torch.from_numpy(spatial_obs).float())
+        # self.non_spatial_obs[step + 1].copy_(torch.from_numpy(np.expand_dims(non_spatial_obs, axis=1)).float())
+        # self.next_spatial_obs[step + 1].copy_(torch.from_numpy(next_spatial_obs).float())
+        # self.next_non_spatial_obs[step + 1].copy_(torch.from_numpy(np.expand_dims(next_non_spatial_obs, axis=1)).float())
+        # self.actions[step].copy_(action)
+        # self.rewards[step].copy_(torch.from_numpy(np.expand_dims(reward, 1)).float())
+        # self.masks[step].copy_(mask)
+        # self.action_masks[step + 1].copy_(torch.from_numpy(action_masks))
+        # self._storage_size += 1
         # data = (obs_t, action, reward, obs_tp1, done)
+        self.spatial_obs[self._next_idx+1].copy_(torch.from_numpy(spatial_obs).float())
+        self.non_spatial_obs[self._next_idx+1].copy_(torch.from_numpy(np.expand_dims(non_spatial_obs, axis=1)).float())
+        # self.next_spatial_obs[self._next_idx].copy_(torch.from_numpy(next_spatial_obs).float())
+        # self.next_non_spatial_obs[self._next_idx].copy_(
+        #     torch.from_numpy(np.expand_dims(next_non_spatial_obs, axis=1)).float())
+        self.actions[self._next_idx].copy_(action)
+        self.rewards[self._next_idx].copy_(torch.from_numpy(np.expand_dims(reward, 1)).float())
+        self.masks[self._next_idx].copy_(mask)
+        self.action_masks[self._next_idx + 1].copy_(torch.from_numpy(action_masks))
         data = (
             torch.from_numpy(spatial_obs).float(),
             torch.from_numpy(np.expand_dims(non_spatial_obs, axis=1)).float(),
@@ -85,21 +116,25 @@ class ReplayBuffer(object):
 
     def _encode_sample(self, idxes):
         #todo make more efficient
-        spatial_obs, non_spatial_obs, next_spatial_obs, next_non_spatial_obs, actions, rewards, masks, action_masks = [], [], [], [], [], [], [], []
-        for i in idxes:
-            data = self._storage[i]
-            spatial, non_spatial, next_spatial, next_non_spatial, action, reward, mask, action_mask = data
-            spatial_obs.append(spatial)
-            non_spatial_obs.append(non_spatial)
-            next_spatial_obs.append(next_spatial)
-            next_non_spatial_obs.append(next_non_spatial)
-            actions.append(action.to("cpu"))
-            rewards.append(reward)
-            masks.append(mask)
-            action_masks.append(action_mask)
+
+        # spatial_obs, non_spatial_obs, next_spatial_obs, next_non_spatial_obs, actions, rewards, masks, action_masks = [], [], [], [], [], [], [], []
+        # for i in idxes:
+        #     data = self._storage[i]
+        #     spatial, non_spatial, next_spatial, next_non_spatial, action, reward, mask, action_mask = data
+        #     spatial_obs.append(spatial)
+        #     non_spatial_obs.append(non_spatial)
+        #     next_spatial_obs.append(next_spatial)
+        #     next_non_spatial_obs.append(next_non_spatial)
+        #     actions.append(action.to("cpu"))
+        #     rewards.append(reward)
+        #     masks.append(mask)
+        #     action_masks.append(action_mask)
+        next_idxes = [(idx+1) % len(self._storage) for idx in idxes]
         return (
             self.spatial_obs[idxes],
             self.non_spatial_obs[idxes],
+            self.spatial_obs[next_idxes], # next_obs
+            self.non_spatial_obs[next_idxes],
             self.actions[idxes],
             self.rewards[idxes],
             self.masks[idxes],
@@ -127,11 +162,12 @@ class ReplayBuffer(object):
             the end of an episode and 0 otherwise.
         """
         idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size)]
+        # idxes = [random.randint(0, self._storage_size - 1) for _ in range(batch_size)]
         return self._encode_sample(idxes)
 
 
 class PrioritizedReplayBuffer(ReplayBuffer):
-    def __init__(self, size=ConfigParams.steps_per_update.value, alpha=0.6):
+    def __init__(self, size=ConfigParams.buffer_size.value, alpha=0.6):
         """Create Prioritized Replay buffer.
         Parameters
         ----------
@@ -167,6 +203,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     def _sample_proportional(self, batch_size):
         res = []
         p_total = self._it_sum.sum(0, len(self._storage) - 1)
+        # p_total = self._it_sum.sum(0, self._storage_size - 1)
         every_range_len = p_total / batch_size
         for i in range(batch_size):
             mass = random.random() * every_range_len + i * every_range_len
@@ -213,10 +250,12 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         weights = []
         p_min = self._it_min.min() / self._it_sum.sum()
         max_weight = (p_min * len(self._storage)) ** (-beta)
+        # max_weight = (p_min * self._storage_size) ** (-beta)
 
         for idx in idxes:
             p_sample = self._it_sum[idx] / self._it_sum.sum()
             weight = (p_sample * len(self._storage)) ** (-beta)
+            # weight = (p_sample * self._storage_size) ** (-beta)
             weights.append(weight / max_weight)
         weights = np.array(weights)
         encoded_sample = self._encode_sample(idxes)
@@ -235,10 +274,14 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             transitions at the sampled idxes denoted by
             variable `idxes`.
         """
-        assert len(idxes) == len(priorities)
+        assert len(idxes) * ConfigParams.num_processes.value == len(priorities)
+        # todo check what below comments are
+        # idxes = [idxes for i in range(ConfigParams.num_processes.value)]
+        # idxes = np.concatenate(idxes)
         for idx, priority in zip(idxes, priorities):
             assert priority > 0
             assert 0 <= idx < len(self._storage)
+            # assert 0 <= idx < self._storage_size
             self._it_sum[idx] = priority ** self._alpha
             self._it_min[idx] = priority ** self._alpha
 
