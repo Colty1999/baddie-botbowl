@@ -1,15 +1,16 @@
 import uuid
 
 import botbowl
-from botbowl import Action, ActionType, Square, BBDieResult, Skill, ProcBot, Game, EnvConf, BotBowlEnv, Formation
+from botbowl import Action, ActionType, Square, BBDieResult, Skill, ProcBot, Game, EnvConf, BotBowlEnv, Formation, Rules, Tile
 from Data.default_formations import get_wedge_offense, get_zone_defense
 import botbowl.core.pathfinding as pf
 import math
 from botbowl.core.pathfinding.python_pathfinding import Path  # Only used for type checker
-from typing import List
+from typing import List, Tuple
 import torch
 import numpy as np
 import os
+
 
 
 class ScriptedBot(ProcBot):
@@ -25,6 +26,10 @@ class ScriptedBot(ProcBot):
         self.last_turn = 0
         self.last_half = 0
         self.observation_action_pairs = []
+
+        self.is_agresive = 0
+        self.safe_play = 0
+        self.prob_risk = 0
 
         self.off_formation = [
             ["-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-"],
@@ -174,39 +179,118 @@ class ScriptedBot(ProcBot):
     def perfect_defense(self, game):
         return Action(ActionType.END_SETUP)
 
+
+    def set_variables(self, is_agresive, safe_play, prob_risk):
+        self.is_agresive = is_agresive
+        self.safe_play = safe_play
+        self.prob_risk = prob_risk
+        # 0 - is_agresive = variable describing how aggresive is our bot 0 - very agressive
+        # 1 - safe_play = variable describing how safe we play 1 - very safe
+        # 2 - prob_risk = variable deciding how safe we want to play and do reroll 1 - never reroll
+
     def reroll(self, game):
         """
         Select between USE_REROLL and DONT_USE_REROLL
         """
+        p_success = 0
         reroll_proc = game.get_procedure()
         context = reroll_proc.context
         if type(context) == botbowl.Dodge:
-            return Action(ActionType.USE_REROLL)
+            p_success = self.calculate_dodge_success(context.player, game)
         if type(context) == botbowl.Pickup:
-            return Action(ActionType.USE_REROLL)
+            p_success = self.calculate_pickup_success(context.player, game)
         if type(context) == botbowl.PassAttempt:
-            return Action(ActionType.USE_REROLL)
+            p_success = self.calculate_pass_success(context.player, game)
         if type(context) == botbowl.Catch:
-            return Action(ActionType.USE_REROLL)
+            p_success = self.calculate_catch_success(context.player, game)
         if type(context) == botbowl.GFI:
             return Action(ActionType.USE_REROLL)
         if type(context) == botbowl.BloodLust:
             return Action(ActionType.USE_REROLL)
         if type(context) == botbowl.Block:
-            attacker = context.attacker
-            attackers_down = 0
-            for die in context.roll.dice:
-                if die.get_value() == BBDieResult.ATTACKER_DOWN:
-                    attackers_down += 1
-                elif die.get_value() == BBDieResult.BOTH_DOWN and not attacker.has_skill(
-                        Skill.BLOCK) and not attacker.has_skill(Skill.WRESTLE):
-                    attackers_down += 1
-            if attackers_down > 0 and context.favor != self.my_team:
+            p_success_block = self.calculate_block_success(game,context.attacker, context.defender)
+            if p_success_block[0] > self.is_agresive: #probability of hitting attacker
                 return Action(ActionType.USE_REROLL)
-            if attackers_down == len(context.roll.dice) and context.favor != self.opp_team:
+            if p_success_block[1] < self.safe_play: #probability of hitting defender
+                return Action(ActionType.USE_REROLL)
+            if (p_success_block[2] > self.is_agresive and context.attacker == game.get_ball_carrier()) or (p_success_block[3] < self.safe_play and context.defender == game.get_ball_carrier()):  #probability of dropping ball
                 return Action(ActionType.USE_REROLL)
             return Action(ActionType.DONT_USE_REROLL)
-        return Action(ActionType.DONT_USE_REROLL)
+        if p_success > self.prob_risk:
+            return Action(ActionType.USE_REROLL)
+        else:
+            return Action(ActionType.DONT_USE_REROLL)
+
+    def calculate_dodge_success(self,player,game):
+        ag_roll = Rules.agility_table[player.get_ag()] + 1 - game.num_tackle_zones_in(player)
+        ag_roll = max(2, min(6, ag_roll))
+        successful_outcomes = 6 - (ag_roll - 1)
+        p = successful_outcomes / 6.0
+        p += (1.0 - p) * p
+        print(f" dodge taki ag_roll= {ag_roll}   prob = {p}")
+        return p
+
+    def calculate_pickup_success(self,player,game):
+        ag_roll = Rules.agility_table[player.get_ag()] + 1 - game.num_tackle_zones_at(player, game.get_ball_position())
+        ag_roll = max(2, min(6, ag_roll))
+        successful_outcomes = 6 - (ag_roll - 1)
+        p = successful_outcomes / 6.0
+        p += (1.0 - p) * p
+        print(f" pickup taki ag_roll= {ag_roll}   prob = {p}")
+        return p
+
+    def calculate_pass_success(self,player,game):
+        distance = game.get_pass_disctance(player.position, game.get_ball_position())
+        modifiers = Rules.pass_modifiers[distance] - game.num_tackle_zone_in(player)
+        ag_roll = Rules.agility_table[player.get_ag()] - modifiers
+        ag_roll = max(2, min(6, ag_roll))
+        successful_outcomes = 6 - (ag_roll - 1)
+        p = successful_outcomes / 6.0
+        p += (1.0 - p) * p
+        print(f" pass taki ag_roll= {ag_roll}   prob = {p}")
+        return p
+
+    def calculate_catch_success(self,player,game):
+        ag_roll = Rules.agility_table[player.get_ag()]
+        ag_roll = max(2, min(6, ag_roll))
+        successful_outcomes = 6 - (ag_roll - 1)
+        p = successful_outcomes / 6.0
+        p += (1.0 - p) * p
+        print(f" catch taki ag_roll= {ag_roll}   prob = {p}")
+        return p
+
+    def calculate_block_success(self,game, attacker, defender) -> Tuple[float, float, float, float]:
+        dice = game.num_block_dice(attacker, defender)
+        push_squares = game.get_push_squares(attacker.position, defender.position)
+        crowd_push = game.arena.board[push_squares[0].y][push_squares[0].x] == Tile.CROWD and not defender.has_skill(
+            Skill.STAND_FIRM)
+        p_self = 1.0 / 6.0 if attacker.has_skill(Skill.BLOCK) else 2.0 / 6.0
+        p_opp = 2.0 / 6.0 if attacker.has_skill(Skill.BLOCK) else 2.0 / 6.0
+        if crowd_push:
+            p_opp += 2.0 / 6.0
+        if not crowd_push:
+            p_opp -= (1.0 / 6.0 if defender.has_skill(Skill.DODGE) and not attacker.has_skill(Skill.TACKLE) else 0.0)
+        if dice == 2:
+            p_self -= (1.0 - p_self) * p_self
+            p_opp += (1.0 - p_opp) * p_opp
+        if dice == 3:
+            p_self -= (1.0 - p_self) * p_self
+            p_opp += (1.0 - p_opp) * p_opp
+        if dice == -2:
+            p_self += (1.0 - p_self) * p_self
+            p_opp -= (1.0 - p_opp) * p_opp
+        if dice == -3:
+            p_self += (1.0 - p_self) * p_self
+            p_opp -= (1.0 - p_opp) * p_opp
+        p_fumble_opp = 0.0
+        p_fumble_self = 0.0
+        if game.get_ball_carrier() == defender:
+            p_fumble_opp = p_opp
+            if not crowd_push and attacker.has_skill(Skill.STRIP_BALL) and not defender.has_skill(Skill.SURE_HANDS):
+                p_fumble_opp += 2.0 / 6.0
+        elif game.get_ball_carrier() == attacker:
+            p_fumble_self = p_self
+        return p_self, p_opp, p_fumble_self, p_fumble_opp
 
     def place_ball(self, game):
         """
@@ -717,42 +801,27 @@ class ScriptedBot(ProcBot):
                 for player, rolls in zip(action.players, action.rolls):
                     return Action(ActionType.SELECT_PLAYER, player=player)
         return Action(ActionType.SELECT_NONE)
-
+    """
     def pass_action(self, game):
-        """
-        Reroll or not.
-        """
         return Action(ActionType.USE_REROLL)
         # return Action(ActionType.DONT_USE_REROLL)
 
     def catch(self, game):
-        """
-        Reroll or not.
-        """
         return Action(ActionType.USE_REROLL)
         # return Action(ActionType.DONT_USE_REROLL)
 
     def gfi(self, game):
-        """
-        Reroll or not.
-        """
         return Action(ActionType.USE_REROLL)
         # return Action(ActionType.DONT_USE_REROLL)
 
     def dodge(self, game):
-        """
-        Reroll or not.
-        """
         return Action(ActionType.USE_REROLL)
         # return Action(ActionType.DONT_USE_REROLL)
 
     def pickup(self, game):
-        """
-        Reroll or not.
-        """
         return Action(ActionType.USE_REROLL)
         # return Action(ActionType.DONT_USE_REROLL)
-
+    """
     def use_juggernaut(self, game):
         return Action(ActionType.USE_SKILL)
         # return Action(ActionType.DONT_USE_SKILL)

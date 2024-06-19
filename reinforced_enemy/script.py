@@ -119,8 +119,13 @@ class MyScriptedBot(ProcBot):
         """
         reroll_proc = game.get_procedure()
         context = reroll_proc.context
+        is_safe = 0.5
         if type(context) == botbowl.Dodge:
-            return Action(ActionType.USE_REROLL)
+            success_chance = self.calculate_dodge_success(game)
+            if is_safe < success_chance:
+                return Action(ActionType.USE_REROLL)
+            else:
+                return Action(ActionType.DONT_USE_REROLL)
         if type(context) == botbowl.Pickup:
             return Action(ActionType.USE_REROLL)
         if type(context) == botbowl.PassAttempt:
@@ -145,3 +150,9 @@ class MyScriptedBot(ProcBot):
                 return Action(ActionType.USE_REROLL)
             return Action(ActionType.DONT_USE_REROLL)
         return Action(ActionType.DONT_USE_REROLL)
+
+    def calculate_dodge_success(self,game):
+        ag = game.player.get_agility()
+        required_roll = 7 - ag  # Zakładamy prosty modyfikator 7 - czyli bez zadnych udziwnnien
+        success_chance = (6 - required_roll + 1) / 6.0
+        return  success_chance
