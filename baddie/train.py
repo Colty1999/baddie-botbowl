@@ -47,7 +47,7 @@ def make_env(env_conf, ppcg=ConfigParams.ppcg.value):
     if ppcg:
         env = PPCGWrapper(env)
     # env = ScriptedActionWrapper(env, scripted_func=a2c_scripted_actions) #todo add scripted actions later on
-    env = RewardWrapper(env, home_reward_func=A2C_Reward())
+    env = RewardWrapper(env, home_reward_func=A2C_Reward(), away_reward_func=A2C_Reward())
     return env
 
 
@@ -64,8 +64,8 @@ def main(load_model=True, difficulty=0.0, plot=False):
     action_space = len(action_mask)
 
     # Todo BC
-    train_dataset, _ = get_scripted_dataset(training_percentage=0.75)
-    dataloader_train = get_dataloader(train_dataset, batch_size=64, num_workers=4)  # original batch_size=5
+    train_dataset, _ = get_scripted_dataset(training_percentage=1)
+    dataloader_train = get_dataloader(train_dataset, batch_size=8, num_workers=2)  # original batch_size=5
     dataloader_train_iter = iter(dataloader_train)
 
     del env, non_spat_obs, action_mask  # remove from scope to avoid confusion further down
@@ -96,7 +96,7 @@ def main(load_model=True, difficulty=0.0, plot=False):
 
     # todo PPCG
     difficulty = difficulty if ConfigParams.ppcg.value else 1.0  # todo CHANGE DIFFICULTY BACK TO 1.0
-    dif_delta = 0.0005
+    dif_delta = 0 #0.00001
 
     # Variables for storing stats
     all_updates = 0
@@ -104,7 +104,8 @@ def main(load_model=True, difficulty=0.0, plot=False):
     all_steps = 0
     episodes = 0
     best_reward = -100000
-    best_diff = 0.1
+    best_diff = 0.001
+    no_improvement = 0
     entropy_coef = ConfigParams.entropy_coef.value
     proc_rewards = np.zeros(ConfigParams.num_processes.value)
     proc_tds = np.zeros(ConfigParams.num_processes.value)
@@ -153,27 +154,43 @@ def main(load_model=True, difficulty=0.0, plot=False):
     non_spatial_obs = non_spatial_obs.to(ConfigParams.device.value)
 
     # Add first obs to buffer
+    # todo check if this works as intended
     non_spatial_obs = torch.unsqueeze(non_spatial_obs, dim=1)
     buffer.spatial_obs[0].copy_(spatial_obs)
+    buffer.next_spatial_obs[0].copy_(spatial_obs)
     buffer.non_spatial_obs[0].copy_(non_spatial_obs)
+    buffer.next_non_spatial_obs[0].copy_(non_spatial_obs)
     buffer.action_masks[0].copy_(action_masks)
+    buffer.next_action_masks[0].copy_(action_masks)
     buffer.to(ConfigParams.device.value)
     updates_num = ConfigParams.num_processes.value//ConfigParams.steps_per_update.value
     non_spatial_obs = torch.squeeze(non_spatial_obs, dim=1)
     spatial_obs, non_spatial_obs, action_masks = spatial_obs.numpy(force=True), non_spatial_obs.numpy(force=True), action_masks.numpy(force=True)
     pbar = tqdm.tqdm(desc="Updates", total=updates_num)
     step = 0
+    epsilon = 0.5
+    eps_decay = 0.995
+    eps_final = 0.05
 
     while all_steps < ConfigParams.num_steps.value:
         torch.cuda.empty_cache()
+        # epsilon = eps_final + (epsilon - eps_final) * np.exp(-eps_decay * all_steps)
         # todo check if steps per update work well as buffer size
         for _ in range(ConfigParams.steps_per_update.value):
             # todo check if implementation of epsilon greedy will help
-            _, actions = dqn.act(buffer.spatial_obs[step], buffer.non_spatial_obs[step], buffer.action_masks[step], buffer.actions[step-1])
+            if np.random.rand() < epsilon:
+                eps_mask = buffer.action_masks[step].clone().float()
+                actions = torch.multinomial(eps_mask, num_samples=1)
+            else:
+                _, actions = dqn.act(buffer.spatial_obs[step], buffer.non_spatial_obs[step], buffer.action_masks[step], buffer.actions[step-1])
+                #todo check the alternative
+                # value, advantage = dqn.act(buffer.spatial_obs[step], buffer.non_spatial_obs[step], buffer.action_masks[step],
+                #                      buffer.actions[step - 1])
+                # actions = value + (advantage - advantage.float().mean())
 
-            action_objects = (action[0] for action in actions.cpu().numpy())
+            action_objects = (action[0] for action in actions.detach().cpu().numpy())
 
-            next_spatial_obs, next_non_spatial_obs, action_masks, shaped_reward, tds_scored, tds_opp_scored, done = envs.step(
+            next_spatial_obs, next_non_spatial_obs, next_action_masks, shaped_reward, tds_scored, tds_opp_scored, done = envs.step(
                 action_objects, difficulty=difficulty)
 
             proc_rewards += shaped_reward
@@ -202,7 +219,7 @@ def main(load_model=True, difficulty=0.0, plot=False):
                     if ConfigParams.ppcg.value:
                         difficulty = min(1.0, max(0, difficulty))
                     else:
-                        difficulty = 1.0  #todo REVERT TO 1.0
+                        difficulty = 1.0
                     episode_rewards.append(proc_rewards[i])
                     episode_tds.append(proc_tds[i])
                     episode_tds_opp.append(proc_tds_opp[i])
@@ -212,18 +229,19 @@ def main(load_model=True, difficulty=0.0, plot=False):
 
             # insert the step taken into buffer
             masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done])
-
+            spatial_obs, non_spatial_obs = next_spatial_obs, next_non_spatial_obs  # todo  clean this up, deprecated to be removed
+            action_masks = next_action_masks  # todo  clean this up, deprecated to be removed
+            # todo remove redundancies, we do not keep next states separetely, we just get idx+1
             buffer.add(
                 step, spatial_obs, non_spatial_obs, next_spatial_obs, next_non_spatial_obs,
-                actions.data, shaped_reward, masks, action_masks
+                actions.data, shaped_reward, masks, action_masks, next_action_masks
             )
-
-            spatial_obs, non_spatial_obs = next_spatial_obs, next_non_spatial_obs  # todo  clean this up
 
             # spatial_obs, non_spatial_obs = next_spatial_obs, next_non_spatial_obs  # ORIGINALLY WAS HERE, MOVED UP
             step = (step + 1) % ConfigParams.buffer_size.value
 
         # -- TRAINING -- #
+        epsilon = max(epsilon*eps_decay, eps_final)
         if step == 0:
             buffer.non_spatial_obs[0].copy_(buffer.non_spatial_obs[-1])
             buffer.spatial_obs[0].copy_(buffer.spatial_obs[-1])
@@ -232,9 +250,10 @@ def main(load_model=True, difficulty=0.0, plot=False):
 
             # Sample data
             # todo simplify the process below
-            batch = buffer.sample(ConfigParams.batch_size.value, beta=0.4)
+            batch = buffer.sample(ConfigParams.batch_size.value)#, beta=0.4)
             batch_spatial_obs, batch_non_spatial_obs, batch_next_spatial_obs, batch_next_non_spatial_obs,\
-            batch_actions, batch_shaped_reward, batch_masks, batch_action_masks, weights, idexes = batch
+            batch_actions, batch_shaped_reward, batch_masks, batch_action_masks, batch_next_action_masks, \
+            weights, idexes = batch
 
             # todo check if works as intended/is needed
             spatial = Variable(batch_spatial_obs)
@@ -249,8 +268,12 @@ def main(load_model=True, difficulty=0.0, plot=False):
 
             batch_actions = Variable(torch.LongTensor(batch_actions.cpu().view(-1, 1)))
             batch_actions = batch_actions.to(ConfigParams.device.value)
+
             batch_actions_mask = Variable(batch_action_masks)
             batch_actions_mask = batch_actions_mask.view(-1, action_space)
+            batch_next_actions_mask = Variable(batch_next_action_masks)
+            batch_next_actions_mask = batch_next_actions_mask.view(-1, action_space)
+
             batch_shaped_reward = Variable(batch_shaped_reward.view(-1, 1))
             batch_masks = Variable(batch_masks.view(-1, 1))
             # todo check if logic below check out with current one
@@ -262,13 +285,23 @@ def main(load_model=True, difficulty=0.0, plot=False):
             #             td_target = data.rewards.flatten() + args.gamma * target_max * (1 - data.dones.flatten())
             #         old_val = q_network(data.observations).gather(1, data.actions).squeeze()
             #         loss = F.mse_loss(td_target, old_val)
-            _, curr_q = dqn.forward(spatial, non_spatial)  #todo make more efficient
+            #todo check the alternative - remember to also make this change in the gathering phase
+            # curr_value, curr_action = dqn.get_action_probs(spatial, non_spatial, batch_actions_mask)
+            # curr_q = curr_value + (curr_action - curr_action.float().mean())
+            # curr_q = curr_q.gather(1, batch_actions)
+            # bootstrap_value, bootstrap_action = target_dqn.get_action_probs(next_spatial, next_non_spatial, batch_next_actions_mask)
+            # bootstrap_action.to(torch.int64)
+            # bootstrap_q = bootstrap_value + (bootstrap_action - bootstrap_action.float().mean())
+            # bootstrap_q = torch.max(bootstrap_q, 1)[0].view(bootstrap_q.size(0), 1)
+
+            _, curr_q = dqn.get_action_probs(spatial, non_spatial, batch_actions_mask)  #todo make more efficient
             curr_q = curr_q.gather(1, batch_actions)
             # _, bootstrap_q = target_dqn(spatial, non_spatial)
-            _, bootstrap_q = target_dqn(next_spatial, next_non_spatial)
+            _, bootstrap_q = target_dqn.get_action_probs(next_spatial, next_non_spatial, batch_next_actions_mask)
             bootstrap_q = torch.max(bootstrap_q,1)[0].view(bootstrap_q.size(0), 1)
             # self.returns[step] = self.returns[step + 1] * gamma * self.masks[step] + self.rewards[step]
-            target_q = batch_shaped_reward + batch_masks * ConfigParams.gamma.value ** ConfigParams.steps_per_update.value * bootstrap_q
+
+            target_q = batch_shaped_reward + batch_masks * ConfigParams.gamma.value * bootstrap_q # ConfigParams.gamma.value ** ConfigParams.steps_per_update.value
             weights = torch.FloatTensor(weights).to(ConfigParams.device.value)
             weights.cuda(non_blocking=True)
             weights = weights.mean()
@@ -291,14 +324,14 @@ def main(load_model=True, difficulty=0.0, plot=False):
                 target_param.data.copy_(ConfigParams.tau.value * param + (1 - ConfigParams.tau.value) * target_param)
 
             new_priorities = torch.abs(target_q - curr_q).detach().view(-1)
-            new_priorities = torch.clamp(new_priorities, min=1e-8)
+            new_priorities = torch.clamp(new_priorities, min=1e-6)
             new_priorities = new_priorities.cpu().numpy().tolist()
 
             # for priorities in new_priorities:
             buffer.update_priorities(
                 idexes, new_priorities
             )
-
+        buffer.update_beta()
         # buffer.non_spatial_obs[0].copy_(buffer.non_spatial_obs[-1])
         # buffer.spatial_obs[0].copy_(buffer.spatial_obs[-1])
         # buffer.action_masks[0].copy_(buffer.action_masks[-1])
@@ -332,13 +365,12 @@ def main(load_model=True, difficulty=0.0, plot=False):
                 pbar.write(f"Swapping opponent to {model_path}")
                 envs.swap(make_dqn_from_model(name=model_name, filename=model_path))
             else:
-                envs.swap(botbowl.make_bot('scripted'))
-                pbar.write("Swapping opponent to scripted")
+                envs.swap(botbowl.make_bot('random'))
+                pbar.write("Swapping opponent to random")
                 # print("Swapping opponent to scripted")
-            spatial_obs, non_spatial_obs, action_masks, _, _, _, _ = map(torch.from_numpy, envs.reset(difficulty))
+            spatial_obs, non_spatial_obs, action_masks, _, _, _, _ = map(torch.from_numpy, envs.reset())#difficulty))
 
         # --- BC ---
-        #
         bc_spatial_obs, bc_non_spatial_obs, bc_action_mask, bc_actions = spatial_obs, non_spatial_obs, action_masks, actions
         for _ in range(ConfigParams.steps_per_update.value):
             # get one batch from the dataset
@@ -373,7 +405,7 @@ def main(load_model=True, difficulty=0.0, plot=False):
             if train_loss == float('nan'):
                 print(f'Train Loss: {train_loss:.3f}')
 
-            all_steps += ConfigParams.steps_per_update.value
+        all_steps += ConfigParams.steps_per_update.value  # add BC steps
 
         # Logging
         if all_updates % ConfigParams.log_interval.value == 0 \
@@ -424,14 +456,27 @@ def main(load_model=True, difficulty=0.0, plot=False):
             model_name = f"{ConfigParams.exp_id.value}.nn"
             model_path = os.path.join(ConfigParams.model_dir.value, model_name)
             torch.save(dqn, model_path)
-            if difficulty >= best_diff:
-                if mean_reward*difficulty > best_reward*best_diff:
-                    best_reward = mean_reward
-                    best_diff = difficulty
-                    best_model_name = "best.nn"
-                    best_model_path = os.path.join(ConfigParams.model_dir.value, best_model_name)
-                    torch.save(dqn, best_model_path)
-                    print("New best found")
+            # if difficulty >= best_diff:
+            if mean_reward*difficulty > best_reward*best_diff:
+                best_reward = mean_reward
+                best_diff = difficulty
+                best_model_name = "best.nn"
+                best_model_path = os.path.join(ConfigParams.model_dir.value, best_model_name)
+                torch.save(dqn, best_model_path)
+                no_improvement = 0
+                print("New best found")
+            #todo make sure below will work as intended
+            # else:
+            #     no_improvement += 1
+            #     if no_improvement > ConfigParams.patience.value:  # Sanity check, rollback to a better model
+            #         best_model_name = "best.nn"
+            #         best_model_path = os.path.join(ConfigParams.model_dir.value, best_model_name)
+            #         dqn = torch.load(best_model_path)
+            #         dqn.eval()
+            #         target_dqn = torch.load(best_model_path)
+            #         target_dqn.eval()
+            #         no_improvement = 0
+            #         print("Rollback to best")
 
             # plot
             if plot:
@@ -479,4 +524,4 @@ def main(load_model=True, difficulty=0.0, plot=False):
 
 
 if __name__ == "__main__":
-    main(load_model=False, difficulty=0.0)
+    main(load_model=False, difficulty=1.0)

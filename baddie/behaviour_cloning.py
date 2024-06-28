@@ -284,7 +284,7 @@ def evaluation_games(agent_path, adversary_agent, num_games):
 
 if __name__ == '__main__':
     train_dataset, valid_dataset = get_scripted_dataset(training_percentage=0.7, cache_data=True)
-    model, dataloader_train, device = setup_model(train_dataset, batch_size=128, num_workers=4, load_model=False)
+    model, dataloader_train, device = setup_model(train_dataset, batch_size=64, num_workers=2, load_model=False)
     dataloader_valid = get_dataloader(valid_dataset, num_workers=1)
     try:
         training_losses, validation_losses = train(model, device, dataloader_train, dataloader_valid, n_epochs=30, save_path=ConfigParams.model_path.value)

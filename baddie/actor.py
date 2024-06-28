@@ -141,8 +141,8 @@ def main():
     tds_away = 0
     tds_home = 0
     for i in range(n):
-        # host = "127.0.0.1"
-        # server.start_server(host=host, debug=True, use_reloader=False, port=1234)
+        host = "127.0.0.1"
+        server.start_server(host=host, debug=True, use_reloader=False, port=1234)
         if is_home:
             away_agent = botbowl.make_bot('random')
             home_agent = botbowl.make_bot('my-a2c-bot')
