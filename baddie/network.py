@@ -15,23 +15,24 @@ from reinforced_enemy.reinforced_agent import make_env
 
 class ConfigParams(Enum):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    num_steps = 80000000
+    num_steps = 12000000
     num_processes = 4 # was 5
-    steps_per_update = 20 #10  # 50 # 1000
-    batch_size = 32 #32  # 512  # generally the size should be the 2^n, the bigger it is the higher the exploration, but slower learning
-    buffer_size = 256
-    multiple_updates = 4
+    steps_per_update = 4 #10  # 50 # 1000
+    batch_size = 4 #32  # 512  # generally the size should be the 2^n, the bigger it is the higher the exploration, but slower learning
+    buffer_size = 12500
+    multiple_updates = 2
     learning_rate = 5e-6  # 5e-6
     gamma = 0.99
-    tau = 0.01
-    gradient_clip = 0.05#10 #1.5 # was 10
-    q_regularization = 0.001 #0.0
+    tau = 0.05 # 0.01
+    gradient_clip = 10.0 #1.0 #1.5 # was 10
+    q_regularization = 0.05 #0.005 #0.0
     entropy_coef = 0.01
     value_loss_coef = 0.5
     max_grad_norm = 0.05
     log_interval = 25
     save_interval = 50
     reset_steps = 5000  # The environment is reset after this many steps it gets stuck
+    patience = 20
     selfplay_window = 5
     selfplay_save_steps = int(num_steps / 100000)
     selfplay_swap_steps = selfplay_save_steps
@@ -39,12 +40,12 @@ class ConfigParams(Enum):
     ppcg = True
     env_size = 11  # Options are 1,3,5,7,11
     env_name = f"botbowl-{env_size}"
-    env_conf = EnvConf(size=env_size, pathfinding=True)  # pathfinndng=False
+    env_conf = EnvConf(size=env_size)#, pathfinding=True)  # pathfinndng=False
     selfplay = False  #todo make it work
     exp_id = str(uuid.uuid1())
     model_dir = f"models/{env_name}/"
-    model_path = f"models/{env_name}/best_at_random.nn"
-    agent_path = f"models/{env_name}/best.nn"  # bc_model.nn"
+    model_path = f"models/{env_name}/training_baseline.nn"
+    agent_path = f"models/{env_name}/best_with_bc.nn"  # bc_model.nn"
 
 
 env = make_env(ConfigParams.env_conf.value)
@@ -264,6 +265,7 @@ class CNNPolicy(nn.Module):
 
     def get_action_probs(self, spatial_input, non_spatial_input, action_mask):
         values, actions = self(spatial_input, non_spatial_input)
+        actions = values + (actions - actions.float().mean())  # todo check if this works as duelling dqn
         # Masking step: Inspired by: http://juditacs.github.io/2018/12/27/masked-attention.html
         if action_mask is not None:
             if len(action_mask.shape) == 1:
