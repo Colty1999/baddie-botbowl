@@ -114,12 +114,18 @@ class BaddieBotActor(botbowl.Agent):
 
 def main():
     # Register the bot to the framework
-    def _make_my_a2c_bot(name, env_size=11):
+    def _make_my_baseline_bot(name, env_size=11):
+        return BaddieBotActor(name=name,
+                        env_conf=EnvConf(size=env_size),
+                        # scripted_func=a2c_scripted_actions,
+                        filename=ConfigParams.model_path.value)
+    def _make_my_best_bot(name, env_size=11):
         return BaddieBotActor(name=name,
                         env_conf=EnvConf(size=env_size),
                         # scripted_func=a2c_scripted_actions,
                         filename=ConfigParams.agent_path.value)
-    botbowl.register_bot('my-a2c-bot', _make_my_a2c_bot)
+    botbowl.register_bot('baseline', _make_my_baseline_bot)
+    botbowl.register_bot('best', _make_my_best_bot)
     botbowl.register_bot('scripted', ScriptedBot)
 
     # Load configurations, rules, arena and teams
@@ -136,18 +142,18 @@ def main():
     # Play 10 games
     wins = 0
     draws = 0
-    n = 25
+    n = 10
     is_home = True
     tds_away = 0
     tds_home = 0
     for i in range(n):
-        host = "127.0.0.1"
-        server.start_server(host=host, debug=True, use_reloader=False, port=1234)
+        # host = "127.0.0.1"
+        # server.start_server(host=host, debug=True, use_reloader=False, port=1234)
         if is_home:
             away_agent = botbowl.make_bot('random')
-            home_agent = botbowl.make_bot('my-a2c-bot')
+            home_agent = botbowl.make_bot('best')
         else:
-            away_agent = botbowl.make_bot('my-a2c-bot')
+            away_agent = botbowl.make_bot('best')
             home_agent = botbowl.make_bot("random")
         game = botbowl.Game(i, home, away, home_agent, away_agent, config, arena=arena, ruleset=ruleset)
         game.config.fast_mode = True
@@ -157,7 +163,6 @@ def main():
         print("Game is over")
 
         winner = game.get_winner()
-        print(winner)
         if winner is None:
             draws += 1
         elif winner == home_agent and is_home:

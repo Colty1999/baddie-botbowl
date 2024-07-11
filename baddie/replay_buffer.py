@@ -79,7 +79,7 @@ class ReplayBuffer(object):
         self.action_masks = self.action_masks.to(device)
         self.next_action_masks = self.next_action_masks.to(device)
 
-    def add(self, step, spatial_obs, non_spatial_obs, next_spatial_obs, next_non_spatial_obs, action, reward, mask, action_masks, next_action_masks):
+    def add(self, step, spatial_obs, non_spatial_obs, action, reward, mask, action_masks):
         self.spatial_obs[self._next_idx+1].copy_(torch.from_numpy(spatial_obs).float())
         self.non_spatial_obs[self._next_idx+1].copy_(torch.from_numpy(np.expand_dims(non_spatial_obs, axis=1)).float())
         self.actions[self._next_idx].copy_(action)

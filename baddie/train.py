@@ -26,6 +26,11 @@ from replay_buffer import PrioritizedReplayBuffer
 # from test import PrioritizedReplayBuffer
 from behaviour_cloning import get_dataloader
 # from reinforced_enemy.scripted_behaviour_cloning import get_dataloader
+import gc
+
+gc.collect()
+
+torch.cuda.empty_cache()
 
 # Todo split training and recording functionalities into separate files to add readability
 
@@ -47,7 +52,7 @@ def make_env(env_conf, ppcg=ConfigParams.ppcg.value):
     if ppcg:
         env = PPCGWrapper(env)
     # env = ScriptedActionWrapper(env, scripted_func=a2c_scripted_actions) #todo add scripted actions later on
-    env = RewardWrapper(env, home_reward_func=A2C_Reward(), away_reward_func=A2C_Reward())
+    env = RewardWrapper(env, home_reward_func=A2C_Reward())
     return env
 
 
@@ -64,9 +69,9 @@ def main(load_model=True, difficulty=0.0, plot=False):
     action_space = len(action_mask)
 
     # Todo BC
-    train_dataset, _ = get_scripted_dataset(training_percentage=1)
-    dataloader_train = get_dataloader(train_dataset, batch_size=8, num_workers=2)  # original batch_size=5
-    dataloader_train_iter = iter(dataloader_train)
+    # train_dataset, _ = get_scripted_dataset(training_percentage=1)
+    # dataloader_train = get_dataloader(train_dataset, batch_size=4, num_workers=2)  # original batch_size=5
+    # dataloader_train_iter = iter(dataloader_train)
 
     del env, non_spat_obs, action_mask  # remove from scope to avoid confusion further down
 
@@ -131,8 +136,8 @@ def main(load_model=True, difficulty=0.0, plot=False):
     selfplay_next_save = ConfigParams.selfplay_save_steps.value
     selfplay_next_swap = ConfigParams.selfplay_swap_steps.value
     selfplay_models = 0
-    print('playing against scripted')
-    envs.swap('scripted')
+    print('playing against random')
+    envs.swap('random')
     if ConfigParams.selfplay.value:
 
         model_name = f"{ConfigParams.exp_id.value}_selfplay_0.nn"
@@ -167,8 +172,9 @@ def main(load_model=True, difficulty=0.0, plot=False):
     non_spatial_obs = torch.squeeze(non_spatial_obs, dim=1)
     spatial_obs, non_spatial_obs, action_masks = spatial_obs.numpy(force=True), non_spatial_obs.numpy(force=True), action_masks.numpy(force=True)
     pbar = tqdm.tqdm(desc="Updates", total=updates_num)
+    test = 0
     step = 0
-    epsilon = 0.5
+    epsilon = 0.05
     eps_decay = 0.995
     eps_final = 0.05
 
@@ -205,7 +211,7 @@ def main(load_model=True, difficulty=0.0, plot=False):
                         wins.append(1)
                         losses.append(0)
                         draws.append(0)
-                        difficulty += dif_delta
+                        # difficulty += dif_delta
                     elif proc_tds[i] < proc_tds_opp[i]:  # Loss
                         wins.append(0)
                         losses.append(1)
@@ -233,8 +239,8 @@ def main(load_model=True, difficulty=0.0, plot=False):
             action_masks = next_action_masks  # todo  clean this up, deprecated to be removed
             # todo remove redundancies, we do not keep next states separetely, we just get idx+1
             buffer.add(
-                step, spatial_obs, non_spatial_obs, next_spatial_obs, next_non_spatial_obs,
-                actions.data, shaped_reward, masks, action_masks, next_action_masks
+                step, spatial_obs, non_spatial_obs,
+                actions.data, shaped_reward, masks, action_masks
             )
 
             # spatial_obs, non_spatial_obs = next_spatial_obs, next_non_spatial_obs  # ORIGINALLY WAS HERE, MOVED UP
@@ -300,7 +306,6 @@ def main(load_model=True, difficulty=0.0, plot=False):
             _, bootstrap_q = target_dqn.get_action_probs(next_spatial, next_non_spatial, batch_next_actions_mask)
             bootstrap_q = torch.max(bootstrap_q,1)[0].view(bootstrap_q.size(0), 1)
             # self.returns[step] = self.returns[step + 1] * gamma * self.masks[step] + self.rewards[step]
-
             target_q = batch_shaped_reward + batch_masks * ConfigParams.gamma.value * bootstrap_q # ConfigParams.gamma.value ** ConfigParams.steps_per_update.value
             weights = torch.FloatTensor(weights).to(ConfigParams.device.value)
             weights.cuda(non_blocking=True)
@@ -314,8 +319,7 @@ def main(load_model=True, difficulty=0.0, plot=False):
 
             optimizer.zero_grad()
             loss.backward()
-            # todo check if Gradient Clipping is necessary/useful
-            # nn.utils.clip_grad_norm_(dqn.parameters(), ConfigParams.gradient_clip.value) # Gradient clipping
+            nn.utils.clip_grad_norm_(dqn.parameters(), ConfigParams.gradient_clip.value) # Gradient clipping
             optimizer.step()
 
             for target_param, param in zip(
@@ -371,41 +375,43 @@ def main(load_model=True, difficulty=0.0, plot=False):
             spatial_obs, non_spatial_obs, action_masks, _, _, _, _ = map(torch.from_numpy, envs.reset())#difficulty))
 
         # --- BC ---
-        bc_spatial_obs, bc_non_spatial_obs, bc_action_mask, bc_actions = spatial_obs, non_spatial_obs, action_masks, actions
-        for _ in range(ConfigParams.steps_per_update.value):
-            # get one batch from the dataset
-            # Todo remove redundancies below
-            is_spatial_zero = True
-            while is_spatial_zero:  # Todo fix the bug with all zeroes in spatial obs
-                try:
-                    bc_spatial_obs, bc_non_spatial_obs, bc_action_mask, bc_actions = next(dataloader_train_iter)
-                except StopIteration:  # if the iterator is empty, restart
-                    dataloader_train_iter = iter(dataloader_train)
-                    bc_spatial_obs, bc_non_spatial_obs, bc_action_mask, bc_actions = next(dataloader_train_iter)
-                finally:
-                    if torch.count_nonzero(bc_spatial_obs) > 0:
-                        is_spatial_zero = False
-            bc_spatial_obs = bc_spatial_obs.to(ConfigParams.device.value)
-            bc_non_spatial_obs = bc_non_spatial_obs.to(ConfigParams.device.value)
-            bc_actions = bc_actions.type(torch.LongTensor)  # Convert to Long to avoid not implemented for Int error
-            bc_actions = bc_actions.flatten().to(ConfigParams.device.value)
-
-            # zero the parameter gradients
-            optimizer.zero_grad()
-
-            # forward + backward + optimize
-            _, bc_action_log_probs = dqn.get_action_log_probs(bc_spatial_obs, bc_non_spatial_obs)
-
-            # actions = actions.to(ConfigParams.device.value)
-            loss = loss_function(bc_action_log_probs, bc_actions)
-            loss.backward()
-            optimizer.step()
-
-            train_loss = loss.item()
-            if train_loss == float('nan'):
-                print(f'Train Loss: {train_loss:.3f}')
-
-        all_steps += ConfigParams.steps_per_update.value  # add BC steps
+        # bc_spatial_obs, bc_non_spatial_obs, bc_action_mask, bc_actions = spatial_obs, non_spatial_obs, action_masks, actions
+        # for _ in range(ConfigParams.steps_per_update.value):
+        #     # get one batch from the dataset
+        #     # Todo remove redundancies below
+        #     is_spatial_zero = True
+        #     while is_spatial_zero:  # Todo fix the bug with all zeroes in spatial obs
+        #         try:
+        #             bc_spatial_obs, bc_non_spatial_obs, bc_action_mask, bc_actions = next(dataloader_train_iter)
+        #         except StopIteration:  # if the iterator is empty, restart
+        #             dataloader_train_iter = iter(dataloader_train)
+        #             bc_spatial_obs, bc_non_spatial_obs, bc_action_mask, bc_actions = next(dataloader_train_iter)
+        #         finally:
+        #             if torch.count_nonzero(bc_spatial_obs) > 0:
+        #                 is_spatial_zero = False
+        #     bc_spatial_obs = bc_spatial_obs.to(ConfigParams.device.value)
+        #     bc_non_spatial_obs = bc_non_spatial_obs.to(ConfigParams.device.value)
+        #     bc_actions = bc_actions.type(torch.LongTensor)  # Convert to Long to avoid not implemented for Int error
+        #     bc_actions = bc_actions.flatten().to(ConfigParams.device.value)
+        #
+        #     # zero the parameter gradients
+        #     optimizer.zero_grad()
+        #
+        #     # forward + backward + optimize
+        #     _, bc_action_log_probs = target_dqn.get_action_log_probs(bc_spatial_obs, bc_non_spatial_obs)
+        #
+        #     # actions = actions.to(ConfigParams.device.value)
+        #     loss = loss_function(bc_action_log_probs, bc_actions)
+        #     loss.backward()
+        #     optimizer.step()
+        #
+        #     train_loss = loss.item()
+        #     if train_loss == float('nan'):
+        #         print(f'Train Loss: {train_loss:.3f}')
+        #
+        # all_steps += ConfigParams.steps_per_update.value  # add BC steps
+        if all_steps % 1000:
+            dqn.load_state_dict(target_dqn.state_dict())  # sync with learner
 
         # Logging
         if all_updates % ConfigParams.log_interval.value == 0 \
@@ -455,7 +461,7 @@ def main(load_model=True, difficulty=0.0, plot=False):
             # Save model
             model_name = f"{ConfigParams.exp_id.value}.nn"
             model_path = os.path.join(ConfigParams.model_dir.value, model_name)
-            torch.save(dqn, model_path)
+            torch.save(target_dqn, model_path)
             # if difficulty >= best_diff:
             if mean_reward*difficulty > best_reward*best_diff:
                 best_reward = mean_reward
@@ -513,15 +519,16 @@ def main(load_model=True, difficulty=0.0, plot=False):
                 plot_path = os.path.join(f"plots/{ConfigParams.env_name.value}/", plot_name)
                 fig.savefig(plot_path)
                 plt.close('all')
+        test += 1
         pbar.update()
     pbar.close()
     model_name = f"{ConfigParams.exp_id.value}.nn"
     dict_name = f"{ConfigParams.exp_id.value}_dict.nn"
     model_path = os.path.join(ConfigParams.model_dir.value, model_name)
-    torch.save(dqn, model_path)
-    torch.save(dqn.state_dict(), dict_name)
+    torch.save(target_dqn, model_path)
+    torch.save(target_dqn.state_dict(), dict_name)
     envs.close()
 
 
 if __name__ == "__main__":
-    main(load_model=False, difficulty=1.0)
+    main(load_model=True, difficulty=1.0)

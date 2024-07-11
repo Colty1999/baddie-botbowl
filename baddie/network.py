@@ -17,18 +17,18 @@ class ConfigParams(Enum):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     num_steps = 12000000
     num_processes = 4 # was 5
-    steps_per_update = 4 #10  # 50 # 1000
-    batch_size = 4 #32  # 512  # generally the size should be the 2^n, the bigger it is the higher the exploration, but slower learning
-    buffer_size = 12500
+    steps_per_update = 8 #10  # 50 # 1000
+    batch_size = 8 #32  # 512  # generally the size should be the 2^n, the bigger it is the higher the exploration, but slower learning
+    buffer_size = 8000
     multiple_updates = 2
     learning_rate = 5e-6  # 5e-6
     gamma = 0.99
-    tau = 0.05 # 0.01
-    gradient_clip = 10.0 #1.0 #1.5 # was 10
+    tau = 0.01 # 0.75 worked well# 0.01 # setting this higher helped talk abt this in paper
+    gradient_clip = 2.0 #1.0 #1.5 # was 10
     q_regularization = 0.05 #0.005 #0.0
     entropy_coef = 0.01
     value_loss_coef = 0.5
-    max_grad_norm = 0.05
+    max_grad_norm = 0.05  # witout it the gradient gets to big and model starts getting worse after the while
     log_interval = 25
     save_interval = 50
     reset_steps = 5000  # The environment is reset after this many steps it gets stuck
@@ -44,8 +44,8 @@ class ConfigParams(Enum):
     selfplay = False  #todo make it work
     exp_id = str(uuid.uuid1())
     model_dir = f"models/{env_name}/"
-    model_path = f"models/{env_name}/training_baseline.nn"
-    agent_path = f"models/{env_name}/best_with_bc.nn"  # bc_model.nn"
+    model_path = f"models/{env_name}/bc_baseline.nn"  #bc_baseline.nn
+    agent_path = f"models/{env_name}/best.nn"  # bc_model.nn"
 
 
 env = make_env(ConfigParams.env_conf.value)
@@ -228,7 +228,8 @@ class CNNPolicy(nn.Module):
 
         # Output streams
         value = self.linear_out(x3)
-        #value = self.critic(x7)
+        actor = value + (actor - actor.mean())
+         #value = self.critic(x7)
         # actor = self.actor(x6)
 
         # return value, policy
@@ -265,7 +266,7 @@ class CNNPolicy(nn.Module):
 
     def get_action_probs(self, spatial_input, non_spatial_input, action_mask):
         values, actions = self(spatial_input, non_spatial_input)
-        actions = values + (actions - actions.float().mean())  # todo check if this works as duelling dqn
+        # actions = values + (actions - actions.float().mean())  # todo check if this works as duelling dqn
         # Masking step: Inspired by: http://juditacs.github.io/2018/12/27/masked-attention.html
         if action_mask is not None:
             if len(action_mask.shape) == 1:
