@@ -14,7 +14,7 @@ from torch.utils.data import TensorDataset, DataLoader
 import tqdm
 
 from botbowl.ai.env import BotBowlEnv, RewardWrapper, EnvConf, ScriptedActionWrapper, BotBowlWrapper, PPCGWrapper
-from examples.scripted_bot_example import *
+from Data.scripted_bot import *
 
 from env import A2C_Reward
 from reinforced_agent import CNNPolicy, A2CAgent, ConfigParams

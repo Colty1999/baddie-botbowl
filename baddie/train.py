@@ -15,7 +15,11 @@ from torch.utils.data import TensorDataset, DataLoader
 import tqdm
 
 from botbowl.ai.env import BotBowlEnv, RewardWrapper, EnvConf, ScriptedActionWrapper, BotBowlWrapper, PPCGWrapper
-from examples.scripted_bot_example import *
+#from examples.scripted_bot_example import *
+
+from Data.scripted_bot import ScriptedBot
+
+
 
 from reinforced_enemy.env import A2C_Reward
 from network import CNNPolicy, ConfigParams
@@ -27,6 +31,8 @@ from replay_buffer import PrioritizedReplayBuffer
 from behaviour_cloning import get_dataloader
 # from reinforced_enemy.scripted_behaviour_cloning import get_dataloader
 import gc
+
+from botbowl.core import procedure
 
 gc.collect()
 
@@ -46,12 +52,31 @@ def ensure_dirs():
         if not os.path.exists(dir):
             os.makedirs(dir)
 
+def a2c_scripted_actions(game):
+    proc_type = type(game.get_procedure())
+    scripted_bot = ScriptedBot(name='MyScriptedBot', out_path="./scripted_dataset", dump=False)
+    if proc_type is procedure.Block:
+        return scripted_bot.block(game=game)
+    elif proc_type is procedure.CoinTossFlip:
+        return scripted_bot.coin_toss_flip(game=game)
+    elif proc_type is procedure.CoinTossKickReceive:
+        return scripted_bot.coin_toss_kick_receive(game=game)
+    elif proc_type is procedure.Reroll:
+        return scripted_bot.reroll(game=game)
+    elif proc_type is procedure.PlaceBall:
+        return scripted_bot.place_ball(game=game)
+    available_action_types = [action_choice.action_type for action_choice in game.get_available_actions()]
+    if len(available_action_types) == 1 and len(game.get_available_actions()[0].positions) == 0 and len(game.get_available_actions()[0].players) == 0:
+         return botbowl.Action(available_action_types[0])
+    if botbowl.ActionType.END_PLAYER_TURN in available_action_types:
+        return botbowl.Action(botbowl.ActionType.END_PLAYER_TURN)
+    return None
 
 def make_env(env_conf, ppcg=ConfigParams.ppcg.value):
     env = BotBowlEnv(env_conf)
     if ppcg:
         env = PPCGWrapper(env)
-    # env = ScriptedActionWrapper(env, scripted_func=a2c_scripted_actions) #todo add scripted actions later on
+    env = ScriptedActionWrapper(env, scripted_func=a2c_scripted_actions) #todo add scripted actions later on
     env = RewardWrapper(env, home_reward_func=A2C_Reward())
     return env
 
@@ -72,7 +97,7 @@ def main(load_model=True, difficulty=0.0, plot=False):
 
     if load_model:
         make_dqn_from_model = partial(BaddieBotActor, env_conf=ConfigParams.env_conf.value,
-                                      filename=ConfigParams.model_path.value)  # , scripted_func=a2c_scripted_actions)
+                                      filename=ConfigParams.model_path.value , scripted_func=a2c_scripted_actions)
         print("Creating model from:", ConfigParams.model_path.value)
         dqn = torch.load(ConfigParams.model_path.value)
         dqn.eval()
@@ -307,6 +332,7 @@ def main(load_model=True, difficulty=0.0, plot=False):
             _, bootstrap_q = target_dqn.get_action_probs(next_spatial, next_non_spatial, batch_next_actions_mask)
             bootstrap_q = torch.max(bootstrap_q,1)[0].view(bootstrap_q.size(0), 1)
             # self.returns[step] = self.returns[step + 1] * gamma * self.masks[step] + self.rewards[step]
+
             target_q = batch_shaped_reward + batch_masks * ConfigParams.gamma.value * bootstrap_q # ConfigParams.gamma.value ** ConfigParams.steps_per_update.value
             weights = torch.FloatTensor(weights).to(ConfigParams.device.value)
             weights.cuda(non_blocking=True)

@@ -20,6 +20,8 @@ from actor import BaddieBotActor
 from Data.generator import get_scripted_dataset, scripted_data_path
 from Data.scripted_bot import ScriptedBot
 
+import venv
+
 
 def split_dataset(dataset, train_percentage):
     split_index = int(len(dataset['X_spatial']) * train_percentage)
@@ -283,6 +285,12 @@ def evaluation_games(agent_path, adversary_agent, num_games):
 
 
 if __name__ == '__main__':
+    print(torch.cuda.is_available())
+    torch.set_num_threads(18)
+    print(torch.get_num_threads())
+    torch.cuda.empty_cache()
+
+
     train_dataset, valid_dataset = get_scripted_dataset(training_percentage=0.7, cache_data=True)
     model, dataloader_train, device = setup_model(train_dataset, batch_size=256, num_workers=2, load_model=False)
     dataloader_valid = get_dataloader(valid_dataset, num_workers=1)

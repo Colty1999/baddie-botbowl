@@ -10,7 +10,8 @@ import botbowl.web.server as server
 from botbowl.ai.env import EnvConf, BotBowlEnv
 from botbowl.ai.layers import *
 from botbowl.ai.env import BotBowlEnv, RewardWrapper, EnvConf, ScriptedActionWrapper, BotBowlWrapper, PPCGWrapper
-from env import A2C_Reward
+
+from reinforced_enemy.env import A2C_Reward
 
 from Data.scripted_bot import ScriptedBot
 

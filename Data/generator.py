@@ -126,4 +126,4 @@ def get_scripted_dataset(paths=[scripted_data_path], training_percentage=0.9, ca
 
 if __name__ == '__main__':
     generator = ScriptedDataGenerator(num_games=100)
-    generator.generate_training_data(bot='random')
+    generator.generate_training_data(bot='both')
