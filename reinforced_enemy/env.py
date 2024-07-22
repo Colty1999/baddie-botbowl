@@ -7,7 +7,7 @@ import botbowl.core.procedure as procedure
 class A2C_Reward:
     # --- Reward function ---
     rewards_own = {
-        OutcomeType.TOUCHDOWN: 5.0,  #Divided all values by 2
+        OutcomeType.TOUCHDOWN: 10.0,  #Divided all values by 2
         # OutcomeType.SUCCESSFUL_CATCH: 0.25,
         # OutcomeType.INTERCEPTION: 0.05,
         # OutcomeType.SUCCESSFUL_PICKUP: 0.125,
@@ -15,16 +15,16 @@ class A2C_Reward:
         # OutcomeType.KNOCKED_DOWN: -0.075,
         # OutcomeType.KNOCKED_OUT: -0.10,
         # OutcomeType.CASUALTY: -0.15
-        OutcomeType.SUCCESSFUL_CATCH: 0.025,
-        OutcomeType.INTERCEPTION: 0.05,
-        OutcomeType.SUCCESSFUL_PICKUP: 0.2,
-        OutcomeType.FUMBLE: -0.05,
-        OutcomeType.KNOCKED_DOWN: -0.15,
-        OutcomeType.KNOCKED_OUT: -0.2,
-        OutcomeType.CASUALTY: -0.25,
-        OutcomeType.FAILED_GFI: -0.05,
-        OutcomeType.FAILED_DODGE: -0.05,
-        OutcomeType.END_OF_GAME_WINNER: 0.5  #todo check if this will help
+        OutcomeType.SUCCESSFUL_CATCH: 0.05,
+        OutcomeType.INTERCEPTION: 0.1,
+        OutcomeType.SUCCESSFUL_PICKUP: 0.3,
+        #OutcomeType.FUMBLE: -0.05,
+        OutcomeType.KNOCKED_DOWN: -0.25,
+        OutcomeType.KNOCKED_OUT: -0.3,
+        OutcomeType.CASUALTY: -0.35,
+        OutcomeType.FAILED_GFI: -0.15,
+        OutcomeType.FAILED_DODGE: -0.15,
+        # OutcomeType.END_OF_GAME_WINNER: 0.5  #todo check if this will help
         # OutcomeType.TURNOVER: -1.2
     }
     rewards_opp = {
@@ -36,21 +36,21 @@ class A2C_Reward:
         # OutcomeType.KNOCKED_DOWN: 0.05,
         # OutcomeType.KNOCKED_OUT: 0.075,
         # OutcomeType.CASUALTY: 0.15
-        OutcomeType.TOUCHDOWN: -5.0,
-        OutcomeType.SUCCESSFUL_CATCH: -0.05,
-        OutcomeType.INTERCEPTION: -0.1,
+        OutcomeType.TOUCHDOWN: -10.0,
+        OutcomeType.SUCCESSFUL_CATCH: -0.15,
+        OutcomeType.INTERCEPTION: -0.2,
         OutcomeType.SUCCESSFUL_PICKUP: -0.4,
         OutcomeType.FUMBLE: 0.05,
-        OutcomeType.KNOCKED_DOWN: 0.25,
+        OutcomeType.KNOCKED_DOWN: 0.3,
         OutcomeType.KNOCKED_OUT: 0.35,
         OutcomeType.CASUALTY: 0.45,
-        OutcomeType.FAILED_GFI: 0.05,
-        OutcomeType.FAILED_DODGE: 0.05,
+        OutcomeType.FAILED_GFI: 0.15,
+        OutcomeType.FAILED_DODGE: 0.15,
         # OutcomeType.END_OF_GAME_WINNER: -1
         # OutcomeType.TURNOVER: 1.2
 
     }
-    ball_progression_reward = 0.005
+    ball_progression_reward = 0.05
 
     def __init__(self):
         self.last_report_idx = 0

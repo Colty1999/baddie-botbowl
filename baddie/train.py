@@ -68,11 +68,6 @@ def main(load_model=True, difficulty=0.0, plot=False):
     non_spatial_obs_space = non_spat_obs.shape[0]
     action_space = len(action_mask)
 
-    # Todo BC
-    # train_dataset, _ = get_scripted_dataset(training_percentage=1)
-    # dataloader_train = get_dataloader(train_dataset, batch_size=4, num_workers=2)  # original batch_size=5
-    # dataloader_train_iter = iter(dataloader_train)
-
     del env, non_spat_obs, action_mask  # remove from scope to avoid confusion further down
 
     if load_model:
@@ -91,9 +86,15 @@ def main(load_model=True, difficulty=0.0, plot=False):
         target_dqn.to(ConfigParams.device.value)
         target_dqn.load_state_dict(dqn.state_dict())
 
+
+    # Todo BC
+    train_dataset, _ = get_scripted_dataset(training_percentage=1)
+    dataloader_train = get_dataloader(train_dataset, batch_size=16, num_workers=1)  # original batch_size=5
+    dataloader_train_iter = iter(dataloader_train)
+
     loss_function = nn.NLLLoss()
     # OPTIMIZER
-    optimizer = optim.RAdam(dqn.parameters(), ConfigParams.learning_rate.value, weight_decay=0.00001)
+    optimizer = optim.RAdam(target_dqn.parameters(), ConfigParams.learning_rate.value, weight_decay=0.00001)
 
     # PRIORITIZED REPLAY BUFFER INIT
     buffer = PrioritizedReplayBuffer()
@@ -174,9 +175,9 @@ def main(load_model=True, difficulty=0.0, plot=False):
     pbar = tqdm.tqdm(desc="Updates", total=updates_num)
     test = 0
     step = 0
-    epsilon = 0.05
+    epsilon = 0.00
     eps_decay = 0.995
-    eps_final = 0.05
+    eps_final = 0.00
 
     while all_steps < ConfigParams.num_steps.value:
         torch.cuda.empty_cache()
@@ -375,43 +376,44 @@ def main(load_model=True, difficulty=0.0, plot=False):
             spatial_obs, non_spatial_obs, action_masks, _, _, _, _ = map(torch.from_numpy, envs.reset())#difficulty))
 
         # --- BC ---
-        # bc_spatial_obs, bc_non_spatial_obs, bc_action_mask, bc_actions = spatial_obs, non_spatial_obs, action_masks, actions
-        # for _ in range(ConfigParams.steps_per_update.value):
-        #     # get one batch from the dataset
-        #     # Todo remove redundancies below
-        #     is_spatial_zero = True
-        #     while is_spatial_zero:  # Todo fix the bug with all zeroes in spatial obs
-        #         try:
-        #             bc_spatial_obs, bc_non_spatial_obs, bc_action_mask, bc_actions = next(dataloader_train_iter)
-        #         except StopIteration:  # if the iterator is empty, restart
-        #             dataloader_train_iter = iter(dataloader_train)
-        #             bc_spatial_obs, bc_non_spatial_obs, bc_action_mask, bc_actions = next(dataloader_train_iter)
-        #         finally:
-        #             if torch.count_nonzero(bc_spatial_obs) > 0:
-        #                 is_spatial_zero = False
-        #     bc_spatial_obs = bc_spatial_obs.to(ConfigParams.device.value)
-        #     bc_non_spatial_obs = bc_non_spatial_obs.to(ConfigParams.device.value)
-        #     bc_actions = bc_actions.type(torch.LongTensor)  # Convert to Long to avoid not implemented for Int error
-        #     bc_actions = bc_actions.flatten().to(ConfigParams.device.value)
-        #
-        #     # zero the parameter gradients
-        #     optimizer.zero_grad()
-        #
-        #     # forward + backward + optimize
-        #     _, bc_action_log_probs = target_dqn.get_action_log_probs(bc_spatial_obs, bc_non_spatial_obs)
-        #
-        #     # actions = actions.to(ConfigParams.device.value)
-        #     loss = loss_function(bc_action_log_probs, bc_actions)
-        #     loss.backward()
-        #     optimizer.step()
-        #
-        #     train_loss = loss.item()
-        #     if train_loss == float('nan'):
-        #         print(f'Train Loss: {train_loss:.3f}')
-        #
-        # all_steps += ConfigParams.steps_per_update.value  # add BC steps
-        if all_steps % 1000:
+        bc_spatial_obs, bc_non_spatial_obs, bc_action_mask, bc_actions = spatial_obs, non_spatial_obs, action_masks, actions
+        for _ in range(ConfigParams.steps_per_update.value):
+            # get one batch from the dataset
+            # Todo remove redundancies below
+            is_spatial_zero = True
+            while is_spatial_zero:  # Todo fix the bug with all zeroes in spatial obs
+                try:
+                    bc_spatial_obs, bc_non_spatial_obs, bc_action_mask, bc_actions = next(dataloader_train_iter)
+                except StopIteration:  # if the iterator is empty, restart
+                    dataloader_train_iter = iter(dataloader_train)
+                    bc_spatial_obs, bc_non_spatial_obs, bc_action_mask, bc_actions = next(dataloader_train_iter)
+                finally:
+                    if torch.count_nonzero(bc_spatial_obs) > 0:
+                        is_spatial_zero = False
+            bc_spatial_obs = bc_spatial_obs.to(ConfigParams.device.value)
+            bc_non_spatial_obs = bc_non_spatial_obs.to(ConfigParams.device.value)
+            bc_actions = bc_actions.type(torch.LongTensor)  # Convert to Long to avoid not implemented for Int error
+            bc_actions = bc_actions.flatten().to(ConfigParams.device.value)
+
+            # zero the parameter gradients
+            optimizer.zero_grad()
+
+            # forward + backward + optimize
+            _, bc_action_log_probs = target_dqn.get_action_log_probs(bc_spatial_obs, bc_non_spatial_obs)
+
+            # actions = actions.to(ConfigParams.device.value)
+            loss = loss_function(bc_action_log_probs, bc_actions)
+            loss.backward()
+            optimizer.step()
+
+            train_loss = loss.item()
+            if train_loss == float('nan'):
+                print(f'Train Loss: {train_loss:.3f}')
+
+        all_steps += ConfigParams.steps_per_update.value  # add BC steps
+        if all_steps % 10 == 0:
             dqn.load_state_dict(target_dqn.state_dict())  # sync with learner
+            # print("Sync")
 
         # Logging
         if all_updates % ConfigParams.log_interval.value == 0 \

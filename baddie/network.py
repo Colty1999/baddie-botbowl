@@ -16,15 +16,15 @@ from reinforced_enemy.reinforced_agent import make_env
 class ConfigParams(Enum):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     num_steps = 12000000
-    num_processes = 4 # was 5
-    steps_per_update = 8 #10  # 50 # 1000
-    batch_size = 8 #32  # 512  # generally the size should be the 2^n, the bigger it is the higher the exploration, but slower learning
-    buffer_size = 8000
+    num_processes = 1 #4 # was 5
+    steps_per_update = 32 #10  # 50 # 1000
+    batch_size = 32 #32  # 512  # generally the size should be the 2^n, the bigger it is the higher the exploration, but slower learning
+    buffer_size = 32000  #Todo rework how buffer works (each step should be individual entry to the list)
     multiple_updates = 2
     learning_rate = 5e-6  # 5e-6
     gamma = 0.99
-    tau = 0.01 # 0.75 worked well# 0.01 # setting this higher helped talk abt this in paper
-    gradient_clip = 2.0 #1.0 #1.5 # was 10
+    tau = 0.1 # 0.75 worked well# 0.01 # setting this higher helped talk abt this in paper
+    gradient_clip = 10.0 #1.0 #1.5 # was 10
     q_regularization = 0.05 #0.005 #0.0
     entropy_coef = 0.01
     value_loss_coef = 0.5
@@ -45,7 +45,7 @@ class ConfigParams(Enum):
     exp_id = str(uuid.uuid1())
     model_dir = f"models/{env_name}/"
     model_path = f"models/{env_name}/bc_baseline.nn"  #bc_baseline.nn
-    agent_path = f"models/{env_name}/best.nn"  # bc_model.nn"
+    agent_path = f"models/{env_name}/curr_best.nn"  # bc_model.nn"
 
 
 env = make_env(ConfigParams.env_conf.value)
@@ -153,6 +153,9 @@ class CNNPolicy(nn.Module):
         self.critic = nn.Linear(hidden_nodes, 1)
         self.actor = nn.Linear(hidden_nodes, actions)
 
+        self.value_stream = nn.Sequential(nn.Linear(8116, 512), nn.ReLU(), nn.Linear(512, 1))
+        self.advantage_stream = nn.Sequential(nn.Linear(8116, 512), nn.ReLU(), nn.Linear(512, 8116))
+
         self.train()
         self.reset_parameters()
 
@@ -227,13 +230,18 @@ class CNNPolicy(nn.Module):
         actor = torch.cat((x4_flatten, x5_flatten), dim=1)
 
         # Output streams
-        value = self.linear_out(x3)
-        actor = value + (actor - actor.mean())
+        # value = self.linear_out(x3)
+        # actor = value + (actor - actor.mean())
+
+        value = self.value_stream(actor)
+        advantage = self.advantage_stream(actor)
+        qvals = value + (advantage - advantage.mean())
+
          #value = self.critic(x7)
         # actor = self.actor(x6)
 
         # return value, policy
-        return value, actor
+        return value, qvals  # actor
 
     def act(self, spatial_inputs, non_spatial_input, action_mask, prev_actions=None):
         values, action_probs = self.get_action_probs(spatial_inputs, non_spatial_input, action_mask=action_mask)

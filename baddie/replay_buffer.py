@@ -63,6 +63,18 @@ class ReplayBuffer(object):
         self.action_masks = torch.zeros(size + 1, ConfigParams.num_processes.value, action_space, dtype=torch.bool)
         self.next_action_masks = torch.zeros(size + 1, ConfigParams.num_processes.value, action_space, dtype=torch.bool)
 
+        # self.spatial_obs = torch.zeros((size + 1)* ConfigParams.num_processes.value, *spatial)
+        # self.non_spatial_obs = torch.zeros((size + 1)* ConfigParams.num_processes.value, *non_spatial)
+        # self.next_spatial_obs = torch.zeros((size + 1)* ConfigParams.num_processes.value, *spatial)
+        # self.next_non_spatial_obs = torch.zeros((size + 1)* ConfigParams.num_processes.value, *non_spatial)
+        # self.rewards = torch.zeros(size, ConfigParams.num_processes.value, 1)
+        # self.returns = torch.zeros(size + 1, ConfigParams.num_processes.value, 1)
+        # self.actions = torch.zeros(size, ConfigParams.num_processes.value, action_shape)
+        # self.actions = self.actions.long()
+        # self.masks = torch.ones((size + 1) * ConfigParams.num_processes.value, 1)  # torch.ones(steps_per_update + 1, num_processes, 1)
+        # self.action_masks = torch.zeros((size + 1) * ConfigParams.num_processes.value, action_space, dtype=torch.bool)
+        # self.next_action_masks = torch.zeros((size + 1)* ConfigParams.num_processes.value, action_space, dtype=torch.bool)
+
     def __len__(self):
         return self._storage_size #len(self._storage)  #  self._storage_size
 
@@ -194,6 +206,8 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         for i in range(batch_size):
             mass = random.random() * every_range_len + i * every_range_len
             idx = self._it_sum.find_prefixsum_idx(mass)
+            # agent_id = random.randint(0, ConfigParams.num_processes.value)
+            # res.append([idx, agent_id])
             res.append(idx)
         return res
 
