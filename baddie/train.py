@@ -18,6 +18,7 @@ from botbowl.ai.env import BotBowlEnv, RewardWrapper, EnvConf, ScriptedActionWra
 #from examples.scripted_bot_example import *
 
 from Data.scripted_bot import ScriptedBot
+#Data.scripted_bot2 import ScriptedBot  | to use modify bot
 
 
 
@@ -51,7 +52,7 @@ def ensure_dirs():
     for dir in ensured_dirs:
         if not os.path.exists(dir):
             os.makedirs(dir)
-
+# old scripted bot
 def a2c_scripted_actions(game):
     proc_type = type(game.get_procedure())
     scripted_bot = ScriptedBot(name='MyScriptedBot', out_path="./scripted_dataset", dump=False)
