@@ -110,7 +110,7 @@ class ScriptedDataset(Dataset):
             self.data[i] = pair
 
 
-def get_scripted_dataset(paths=[scripted_data_path], training_percentage=0.9, cache_data=True):
+def get_scripted_dataset(paths=[scripted_data_path], training_percentage=0.8, test_percentage=0.15, cache_data=True, only_train=False):
     if not isinstance(paths, list):
         raise Exception(f'Expected a list of paths but got {paths}')
     tensor_files = []
@@ -118,12 +118,15 @@ def get_scripted_dataset(paths=[scripted_data_path], training_percentage=0.9, ca
         tensor_files.extend(list(map(lambda file: os.path.join(path, file), filter(lambda file: file.endswith('.pt'), os.listdir(path)))))
     print(f'Found {len(tensor_files)} sample files')
     random.shuffle(tensor_files)
-    split_index = int(len(tensor_files) * training_percentage)
-    training_files, validation_files = tensor_files[:split_index], tensor_files[split_index:]
+    split_index_test = int(len(tensor_files) * test_percentage)  # For now test dataset is amied only to reduced the size of dataloaded as it is too big to run
+    split_index = split_index_test + int(len(tensor_files) * training_percentage)
+    training_files, validation_files = tensor_files[split_index_test:split_index], tensor_files[split_index:]
+    if only_train:
+        return ScriptedDataset(training_files, cache_data=cache_data)
     return ScriptedDataset(training_files, cache_data=cache_data), \
            ScriptedDataset(validation_files, cache_data=cache_data)
 
 
 if __name__ == '__main__':
-    generator = ScriptedDataGenerator(num_games=100)
+    generator = ScriptedDataGenerator(num_games=200)
     generator.generate_training_data(bot='random')

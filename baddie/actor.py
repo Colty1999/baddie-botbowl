@@ -142,7 +142,7 @@ def main():
     # Play 10 games
     wins = 0
     draws = 0
-    n = 100
+    n = 20
     is_home = True
     tds_away = 0
     tds_home = 0

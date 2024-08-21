@@ -7,7 +7,7 @@ import botbowl.core.procedure as procedure
 class A2C_Reward:
     # --- Reward function ---
     rewards_own = {
-        OutcomeType.TOUCHDOWN: 10.0,  #Divided all values by 2
+        OutcomeType.TOUCHDOWN: 5.0,  #Divided all values by 2
         # OutcomeType.SUCCESSFUL_CATCH: 0.25,
         # OutcomeType.INTERCEPTION: 0.05,
         # OutcomeType.SUCCESSFUL_PICKUP: 0.125,
@@ -24,8 +24,8 @@ class A2C_Reward:
         OutcomeType.CASUALTY: -0.35,
         OutcomeType.FAILED_GFI: -0.15,
         OutcomeType.FAILED_DODGE: -0.15,
-        # OutcomeType.END_OF_GAME_WINNER: 0.5  #todo check if this will help
-        # OutcomeType.TURNOVER: -1.2
+        # OutcomeType.END_OF_GAME_WINNER: 100.0,  #todo check if this will help, makes no difference here, added to train
+        OutcomeType.TURNOVER: -0.4
     }
     rewards_opp = {
         # OutcomeType.TOUCHDOWN: -1,
@@ -36,18 +36,18 @@ class A2C_Reward:
         # OutcomeType.KNOCKED_DOWN: 0.05,
         # OutcomeType.KNOCKED_OUT: 0.075,
         # OutcomeType.CASUALTY: 0.15
-        OutcomeType.TOUCHDOWN: -10.0,
+        OutcomeType.TOUCHDOWN: -5.0,
         OutcomeType.SUCCESSFUL_CATCH: -0.15,
         OutcomeType.INTERCEPTION: -0.2,
-        OutcomeType.SUCCESSFUL_PICKUP: -0.4,
+        OutcomeType.SUCCESSFUL_PICKUP: -0.3,
         OutcomeType.FUMBLE: 0.05,
         OutcomeType.KNOCKED_DOWN: 0.3,
         OutcomeType.KNOCKED_OUT: 0.35,
         OutcomeType.CASUALTY: 0.45,
         OutcomeType.FAILED_GFI: 0.15,
         OutcomeType.FAILED_DODGE: 0.15,
-        # OutcomeType.END_OF_GAME_WINNER: -1
-        # OutcomeType.TURNOVER: 1.2
+        # OutcomeType.END_OF_GAME_WINNER: -10.0,
+        # OutcomeType.TURNOVER: 1.0
 
     }
     ball_progression_reward = 0.05

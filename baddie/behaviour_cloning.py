@@ -77,19 +77,19 @@ def setup_model(dataset, batch_size=100, num_workers=1, load_model=False, load_p
     return model, data_loader, device
 
 
-def get_dataloader(dataset, batch_size=100, num_workers=1):
+def get_dataloader(dataset, batch_size=128, num_workers=1):
     return torch.utils.data.DataLoader(dataset, batch_size=batch_size,
                                        shuffle=True, num_workers=num_workers, persistent_workers=True)
 
 
-def train(model, device, dataloader_train, dataloader_valid=None, criterion=nn.NLLLoss(), n_epochs=30, save_path=None):
+def train(model, device, dataloader_train, dataloader_valid=None, criterion=nn.NLLLoss(), n_epochs=30, save_path=None): #criterion=nn.NLLLoss()
     training_losses = []
     validation_losses = []
     training_accuracies = []
     validation_accuracies = []
     model = model
-
-    optimizer = optim.RAdam(model.parameters(), lr=0.0001)  # optim.RAdam(model.parameters(), lr=0.0001)  #
+    best_loss = 1000000
+    optimizer = optim.RAdam(model.parameters(), lr=0.00005)  # optim.RAdam(model.parameters(), lr=0.0001)  #
 
     for epoch in range(n_epochs):
         print('Epoch', epoch)
@@ -108,15 +108,17 @@ def train(model, device, dataloader_train, dataloader_valid=None, criterion=nn.N
                     spatial_obs, non_spatial_obs, action_mask, actions = data  # Todo: check if all steps are properly loaded
                     spatial_obs = spatial_obs.to(device)
                     non_spatial_obs = non_spatial_obs.to(device)
+                    action_mask = action_mask.to(device)
                     actions = actions.type(torch.LongTensor)
                     actions = actions.flatten().to(device)
                      # actions.to(torch.float)  # TODO: make sure actions are saved as float instead of int
 
                     optimizer.zero_grad()
-                    _, action_log_probs, = model.get_action_log_probs(spatial_obs, non_spatial_obs)  # , action_mask)
+                    _, action_log_probs = model.get_action_log_probs(spatial_obs, non_spatial_obs)  # , action_mask)
 
                     loss = criterion(action_log_probs, actions)
                     loss.backward()
+                    nn.utils.clip_grad_norm_(model.parameters(), ConfigParams.gradient_clip.value)
                     optimizer.step()
 
                     train_loss += loss.item()
@@ -182,6 +184,7 @@ def train(model, device, dataloader_train, dataloader_valid=None, criterion=nn.N
 
         # save model after training
         if save_path is not None:
+            # best_loss = valid_loss
             dir_path = os.path.dirname(save_path)
             if not os.path.isdir(dir_path):
                 os.mkdir(dir_path)
@@ -283,11 +286,14 @@ def evaluation_games(agent_path, adversary_agent, num_games):
 
 
 if __name__ == '__main__':
+    # lr = list(map(lambda x: x / 100000, range(1, 11)))
     train_dataset, valid_dataset = get_scripted_dataset(training_percentage=0.7, cache_data=True)
-    model, dataloader_train, device = setup_model(train_dataset, batch_size=256, num_workers=2, load_model=False)
-    dataloader_valid = get_dataloader(valid_dataset, num_workers=1)
+    model, dataloader_train, device = setup_model(train_dataset, batch_size=64, num_workers=1, load_model=False)
+    dataloader_valid = get_dataloader(valid_dataset, num_workers=1, batch_size=64)
+    #dataloader_valid = None
     try:
-        training_losses, validation_losses = train(model, device, dataloader_train, dataloader_valid, n_epochs=15, save_path=ConfigParams.model_path.value)
+        training_losses, validation_losses = train(model, device, dataloader_train, dataloader_valid, n_epochs=30,
+                                                   save_path=ConfigParams.model_path.value)
     except Exception as e:
         stop = 1
 

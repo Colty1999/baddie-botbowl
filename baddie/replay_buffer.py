@@ -159,7 +159,7 @@ class ReplayBuffer(object):
 
 
 class PrioritizedReplayBuffer(ReplayBuffer):
-    def __init__(self, size=ConfigParams.buffer_size.value, alpha=0.7, beta=0.4, beta_start=0.4, beta_end=1.0):
+    def __init__(self, size=ConfigParams.buffer_size.value, alpha=0.6, beta=0.4, beta_start=0.4, beta_end=1.0):
         """Create Prioritized Replay buffer.
         Parameters
         ----------
@@ -203,12 +203,16 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         # p_total = self._it_sum.sum(0, len(self._storage) - 1)
         p_total = self._it_sum.sum(0, self._storage_size - 1)
         every_range_len = p_total / batch_size
-        for i in range(batch_size):
-            mass = random.random() * every_range_len + i * every_range_len
-            idx = self._it_sum.find_prefixsum_idx(mass)
-            # agent_id = random.randint(0, ConfigParams.num_processes.value)
-            # res.append([idx, agent_id])
+        mass = np.random.uniform(0.0, p_total, size=batch_size)
+        for i in mass:
+            idx = self._it_sum.find_prefixsum_idx(i)
             res.append(idx)
+        # for i in range(batch_size):
+        #     mass = random.random() * every_range_len + i * every_range_len
+        #     idx = self._it_sum.find_prefixsum_idx(mass)
+        #     # agent_id = random.randint(0, ConfigParams.num_processes.value)
+        #     # res.append([idx, agent_id])
+        #     res.append(idx)
         return res
 
     def sample(self, batch_size):#, beta):
@@ -363,3 +367,7 @@ class PrioritizedReplayBufferHelper(object):
                 self.send_batch_recv_priors()
             else:
                 pass
+
+#
+# class PrioritizedReplayBuffers(PrioritizedReplayBuffer):
+

@@ -15,26 +15,28 @@ from reinforced_enemy.reinforced_agent import make_env
 
 class ConfigParams(Enum):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    num_steps = 12000000
+    num_steps = 100000 # 12000000
     num_processes = 1 #4 # was 5
-    steps_per_update = 32 #10  # 50 # 1000
-    batch_size = 32 #32  # 512  # generally the size should be the 2^n, the bigger it is the higher the exploration, but slower learning
-    buffer_size = 32000  #Todo rework how buffer works (each step should be individual entry to the list)
-    multiple_updates = 2
+    steps_per_update = 20 #10  # 50 # 1000
+    batch_size = 20 #32  # 512  # generally the size should be the 2^n, the bigger it is the higher the exploration, but slower learning
+    batch_size_bc = 5  # 32  # 512  # generally the size should be the 2^n, the bigger it is the higher the exploration, but slower learning
+    steps_per_update_bc = 5
+    buffer_size = 10000 #12000  #Todo rework how buffer works (each step should be individual entry to the list)
+    multiple_updates = 1
     learning_rate = 5e-6  # 5e-6
-    gamma = 0.99
-    tau = 0.1 # 0.75 worked well# 0.01 # setting this higher helped talk abt this in paper
-    gradient_clip = 10.0 #1.0 #1.5 # was 10
-    q_regularization = 0.05 #0.005 #0.0
+    gamma = 0.999
+    tau = 0.0001 # 0.75 worked well# 0.01 # setting this higher helped talk abt this in paper
+    gradient_clip = 1.0 # 1.0 for pure BC #1.5 # was 10
+    q_regularization = 0  # 0.005 #0.0
     entropy_coef = 0.01
     value_loss_coef = 0.5
-    max_grad_norm = 0.05  # witout it the gradient gets to big and model starts getting worse after the while
+    max_grad_norm = 0.05  # without it the gradient gets too big and model starts getting worse after the while
     log_interval = 25
     save_interval = 50
     reset_steps = 5000  # The environment is reset after this many steps it gets stuck
     patience = 20
     selfplay_window = 5
-    selfplay_save_steps = int(num_steps / 100000)
+    selfplay_save_steps = 1000 #int(num_steps / 100000)
     selfplay_swap_steps = selfplay_save_steps
     num_hidden_nodes = 1024
     ppcg = True
@@ -45,7 +47,7 @@ class ConfigParams(Enum):
     exp_id = str(uuid.uuid1())
     model_dir = f"models/{env_name}/"
     model_path = f"models/{env_name}/bc_baseline.nn"  #bc_baseline.nn
-    agent_path = f"models/{env_name}/curr_best.nn"  # bc_model.nn"
+    agent_path = f"models/{env_name}/best.nn"  # bc_model.nn"
 
 
 env = make_env(ConfigParams.env_conf.value)
@@ -153,8 +155,10 @@ class CNNPolicy(nn.Module):
         self.critic = nn.Linear(hidden_nodes, 1)
         self.actor = nn.Linear(hidden_nodes, actions)
 
-        self.value_stream = nn.Sequential(nn.Linear(8116, 512), nn.ReLU(), nn.Linear(512, 1))
-        self.advantage_stream = nn.Sequential(nn.Linear(8116, 512), nn.ReLU(), nn.Linear(512, 8116))
+        # self.value_stream = nn.Sequential(nn.Linear(8116, 1024), nn.LeakyReLU(), nn.Linear(1024, 1))
+        # self.advantage_stream = nn.Sequential(nn.Linear(8116, 1024), nn.LeakyReLU(), nn.Linear(1024, 8116))
+        self.value_stream = nn.Linear(8116, 1)
+        self.advantage_stream = nn.Linear(8116, 8116)
 
         self.train()
         self.reset_parameters()
@@ -244,6 +248,13 @@ class CNNPolicy(nn.Module):
         return value, qvals  # actor
 
     def act(self, spatial_inputs, non_spatial_input, action_mask, prev_actions=None):
+        # values, actions = self.forward(spatial_inputs,non_spatial_input)
+        # actions[~action_mask] = float('-inf')
+        # actions = actions.argmax().unsqueeze(0).unsqueeze(0)
+        # a = np.where(action_mask.cpu().numpy())[0]  # todo Epsilon greedy atm it's only greedy
+        # b = np.random.choice(a)
+        # actions = F.softmax(actions, dim=1)
+        # actions = actions.multinomial(1)
         values, action_probs = self.get_action_probs(spatial_inputs, non_spatial_input, action_mask=action_mask)
         action_probs = torch.nan_to_num(action_probs)
         action_probs = torch.nn.functional.relu(action_probs, inplace=True)
@@ -281,6 +292,7 @@ class CNNPolicy(nn.Module):
                 action_mask = torch.reshape(action_mask, (1, -1))
             actions[~action_mask] = float('-inf')
         action_probs = F.softmax(actions, dim=1)
+        # action_probs = actions
         return values, action_probs
 
     def get_action_log_probs(self, spatial_input, non_spatial_input, action_mask=None):
