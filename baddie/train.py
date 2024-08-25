@@ -1,5 +1,6 @@
 from enum import Enum
 from functools import partial
+from collections import deque
 
 import botbowl
 import matplotlib.pyplot as plt
@@ -78,6 +79,37 @@ def make_env(env_conf, ppcg=ConfigParams.ppcg.value):
     # env = ScriptedActionWrapper(env, scripted_func=a2c_scripted_actions) #todo add scripted actions later on
     env = RewardWrapper(env, home_reward_func=A2C_Reward())
     return env
+
+
+def preprocess_data(transitions, dqn):
+    # transitions.append([step, spatial_obs, non_spatial_obs, actions, shaped_reward, masks, action_mask])
+    discounted_reward = 0
+    _, last_spatial_obs, last_non_spatial_obs, _, _, masks, last_action_mask = transitions[-1]
+    for transition in list(reversed(transitions)):
+        step, spatial_obs, non_spatial_obs, actions, shaped_reward, _, action_mask = transition
+        discounted_reward = shaped_reward + ConfigParams.gamma.value * discounted_reward
+    # nstep_data = (step, spatial_obs, non_spatial_obs, actions, shaped_reward, masks, action_mask)
+
+    _, curr_q = dqn.forward(
+        torch.FloatTensor(spatial_obs).to(ConfigParams.device.value),
+        torch.FloatTensor(non_spatial_obs).to(ConfigParams.device.value))
+    # curr_q[~action_mask] = float('-inf')
+    curr_q = curr_q[0][actions]
+
+    _, bootstrap_q = dqn.forward(torch.FloatTensor(last_spatial_obs).to(ConfigParams.device.value),
+        torch.FloatTensor(last_non_spatial_obs).to(ConfigParams.device.value))
+    # bootstrap_q[~last_action_mask] = float('-inf')
+    bootstrap_q = torch.max(bootstrap_q, 1)[0].view(bootstrap_q.size(0), 1)
+
+    target_q_value = (
+            torch.from_numpy(discounted_reward).to(ConfigParams.device.value) + ConfigParams.gamma.value ** ConfigParams.multiple_steps.value * bootstrap_q[0]
+    )
+
+    priority_value = torch.abs(target_q_value - curr_q).detach().view(-1)
+    priority_value = torch.clamp(priority_value, min=1e-8)
+    priority_value = priority_value.cpu().numpy().tolist()
+
+    return priority_value
 
 
 def main(load_model=True, difficulty=0.0, plot=False):
@@ -204,7 +236,7 @@ def main(load_model=True, difficulty=0.0, plot=False):
     epsilon = 0.0
     eps_decay = 0.995
     eps_final = 0.05
-
+    transitions = deque(maxlen=ConfigParams.multiple_steps.value)
     while all_steps < ConfigParams.num_steps.value:
         torch.cuda.empty_cache()
         # epsilon = eps_final + (epsilon - eps_final) * np.exp(-eps_decay * all_steps)
@@ -264,19 +296,30 @@ def main(load_model=True, difficulty=0.0, plot=False):
             # insert the step taken into buffer
             masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done])
             spatial_obs, non_spatial_obs = next_spatial_obs, next_non_spatial_obs  # todo  clean this up, deprecated to be removed
-            action_masks = next_action_masks  # todo  clean this up, deprecated to be removed
+            action_masks = next_action_masks
             # todo remove redundancies, we do not keep next states separetely, we just get idx+1
             # buffer.add(
             #     step, spatial_obs, non_spatial_obs,
             #     actions.data, shaped_reward, masks, action_masks
             # )
+
+            transitions.append([step, spatial_obs, non_spatial_obs, actions, shaped_reward, masks, action_masks])
             buffer.add(
                 step, spatial_obs, non_spatial_obs,
                 actions, shaped_reward, masks, action_masks
             )
+            step = (step + 1) % ConfigParams.buffer_size.value
+
+            if len(transitions) == ConfigParams.multiple_steps.value or done:
+                priority_value = preprocess_data(transitions, dqn)
+                # buffer.add(*nstep_data)
+
+                buffer.update_priorities(
+                    [(step-ConfigParams.multiple_steps.value)%ConfigParams.buffer_size.value], priority_value
+                )
 
             # spatial_obs, non_spatial_obs = next_spatial_obs, next_non_spatial_obs  # ORIGINALLY WAS HERE, MOVED UP
-            step = (step + 1) % ConfigParams.buffer_size.value
+
 
         # -- TRAINING -- #
         # epsilon = max(epsilon*eps_decay, eps_final)
@@ -333,7 +376,7 @@ def main(load_model=True, difficulty=0.0, plot=False):
             # bootstrap_q = torch.max(bootstrap_q, 1)[0].view(bootstrap_q.size(0), 1)
 
             # _, curr_q = dqn.get_action_probs(spatial, non_spatial, batch_actions_mask)  #todo make more efficient
-            _, curr_q = target_dqn.forward(spatial, non_spatial)
+            _, curr_q = dqn.forward(spatial, non_spatial)
             curr_q[~batch_actions_mask] = float('-inf')
             curr_q = curr_q.gather(1, batch_actions)
             # _, bootstrap_q = target_dqn(spatial, non_spatial)
@@ -342,7 +385,7 @@ def main(load_model=True, difficulty=0.0, plot=False):
             bootstrap_q[~batch_next_actions_mask] = float('-inf')
             bootstrap_q = torch.max(bootstrap_q,1)[0].view(bootstrap_q.size(0), 1)
             # self.returns[step] = self.returns[step + 1] * gamma * self.masks[step] + self.rewards[step]
-            target_q = batch_shaped_reward + batch_masks * ConfigParams.gamma.value * bootstrap_q # ConfigParams.gamma.value ** ConfigParams.steps_per_update.value
+            target_q = batch_shaped_reward + batch_masks * bootstrap_q * ConfigParams.gamma.value ** ConfigParams.multiple_steps.value # ConfigParams.gamma.value ** ConfigParams.steps_per_update.value
             weights = torch.FloatTensor(weights).to(ConfigParams.device.value)
             weights.cuda(non_blocking=True)
             weights = weights.mean()
@@ -358,10 +401,10 @@ def main(load_model=True, difficulty=0.0, plot=False):
             nn.utils.clip_grad_norm_(dqn.parameters(), ConfigParams.gradient_clip.value) # Gradient clipping
             optimizer.step()
 
-            # for target_param, param in zip(
-            #         target_dqn.parameters(), dqn.parameters()
-            # ):
-            #     target_param.data.copy_(ConfigParams.tau.value * param + (1 - ConfigParams.tau.value) * target_param)
+            for target_param, param in zip(
+                    target_dqn.parameters(), dqn.parameters()
+            ):
+                target_param.data.copy_(ConfigParams.tau.value * param + (1 - ConfigParams.tau.value) * target_param)
 
             new_priorities = torch.abs(target_q - curr_q).detach().view(-1)
             new_priorities = torch.clamp(new_priorities, min=1e-6)
@@ -447,8 +490,8 @@ def main(load_model=True, difficulty=0.0, plot=False):
         #         print(f'Train Loss: {train_loss:.3f}')
         #
         # all_steps += ConfigParams.steps_per_update_bc.value  # add BC steps
-        if all_steps % 500 == 0:
-            target_dqn.load_state_dict(dqn.state_dict())  # sync with learner
+        # if all_steps % 5000 == 0:
+        #     target_dqn.load_state_dict(dqn.state_dict())  # sync with learner
             # print("Sync")
 
         # Logging

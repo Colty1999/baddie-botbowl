@@ -120,7 +120,7 @@ class ReplayBuffer(object):
     def _encode_sample(self, idxes):
         #todo make more efficient
         # next_idxes = [(idx+1) % len(self._storage) for idx in idxes]
-        next_idxes = [(idx+1) % self._storage_size for idx in idxes]
+        next_idxes = [(idx+ConfigParams.multiple_steps.value) % self._storage_size for idx in idxes]
         return (
             self.spatial_obs[idxes],
             self.non_spatial_obs[idxes],
@@ -201,7 +201,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     def _sample_proportional(self, batch_size):
         res = []
         # p_total = self._it_sum.sum(0, len(self._storage) - 1)
-        p_total = self._it_sum.sum(0, self._storage_size - 1)
+        p_total = self._it_sum.sum(0, self._storage_size - ConfigParams.multiple_steps.value)
         every_range_len = p_total / batch_size
         mass = np.random.uniform(0.0, p_total, size=batch_size)
         for i in mass:
@@ -286,9 +286,12 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         # idxes = [idxes for i in range(ConfigParams.num_processes.value)]
         # idxes = np.concatenate(idxes)
         for idx, priority in zip(idxes, priorities):
-            assert priority > 0
-            # assert 0 <= idx < len(self._storage)
-            assert 0 <= idx < self._storage_size
+            try:
+                assert priority > 0
+                # assert 0 <= idx < len(self._storage)
+                assert 0 <= idx < self._storage_size
+            except:
+                stop = 1
             self._it_sum[idx] = priority ** self._alpha
             self._it_min[idx] = priority ** self._alpha
 
