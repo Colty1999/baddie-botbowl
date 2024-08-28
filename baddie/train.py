@@ -150,7 +150,8 @@ def main(load_model=True, difficulty=0.0, plot=False):
 
     loss_function = nn.NLLLoss()
     # OPTIMIZER
-    optimizer = optim.RAdam(target_dqn.parameters(), ConfigParams.learning_rate.value, weight_decay=0.00005)
+    optimizer = optim.RAdam(dqn.parameters(), ConfigParams.learning_rate.value, weight_decay=0.00005)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=10, verbose=True)
 
     # PRIORITIZED REPLAY BUFFER INIT
     buffer = PrioritizedReplayBuffer()
@@ -400,6 +401,7 @@ def main(load_model=True, difficulty=0.0, plot=False):
             loss.backward()
             nn.utils.clip_grad_norm_(dqn.parameters(), ConfigParams.gradient_clip.value) # Gradient clipping
             optimizer.step()
+            scheduler.step(loss.item())
 
             for target_param, param in zip(
                     target_dqn.parameters(), dqn.parameters()

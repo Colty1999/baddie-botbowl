@@ -15,7 +15,7 @@ from reinforced_enemy.reinforced_agent import make_env
 
 class ConfigParams(Enum):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    num_steps = 100000 # 12000000
+    num_steps = 200000 # 12000000
     num_processes = 1 #4 # was 5
     steps_per_update = 40 #10  # 50 # 1000
     batch_size = 5 #32  # 512  # generally the size should be the 2^n, the bigger it is the higher the exploration, but slower learning
@@ -24,7 +24,7 @@ class ConfigParams(Enum):
     buffer_size = 10000 #12000  #Todo rework how buffer works (each step should be individual entry to the list)
     multiple_updates = 8
     multiple_steps = 2
-    learning_rate = 5e-6  # 5e-6
+    learning_rate = 5e-3  # 5e-6
     gamma = 0.999
     tau = 0.001 # 0.75 worked well# 0.01 # setting this higher helped talk abt this in paper
     gradient_clip = 1.0 # 1.0 for pure BC #1.5 # was 10
@@ -49,6 +49,7 @@ class ConfigParams(Enum):
     model_dir = f"models/{env_name}/"
     model_path = f"models/{env_name}/bc_baseline.nn"  #bc_baseline.nn
     agent_path = f"models/{env_name}/best.nn"  # bc_model.nn"
+    a2c_path = f"C:/Users/kubas/OneDrive/Pulpit/do_szkoly/AAA_Projekt/AA_magister/badawczy/bot_bowl/baddie-botbowl/reinforced_enemy/models/botbowl-11/test.nn"
 
 
 env = make_env(ConfigParams.env_conf.value)
